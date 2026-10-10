@@ -1,0 +1,36 @@
+# Build output
+build/
+out/
+*.apk
+*.aab
+*.idsig
+*.dex
+*.class
+*.ap_
+
+# Signing keys (never commit these)
+*.keystore
+*.jks
+*.p12
+*.pk8
+*.pem
+keystore.properties
+
+# Local SDK / IDE config
+local.properties
+.gradle/
+.idea/
+*.iml
+.vscode/
+.cxx/
+captures/
+
+# Logs and dumps
+*.log
+bugreport*.zip
+
+# OS clutter
+.DS_Store
+Thumbs.db
+*~
+*.swp

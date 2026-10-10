@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- An unfolded phone (outline, hinge in the middle) with the outer screen lit on the right half. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:strokeColor="#9CC3F0"
+        android:strokeWidth="3"
+        android:pathData="M34,32h40a4,4 0,0 1,4 4v36a4,4 0,0 1,-4 4h-40a4,4 0,0 1,-4 -4v-36a4,4 0,0 1,4 -4z" />
+    <path
+        android:strokeColor="#9CC3F0"
+        android:strokeWidth="2"
+        android:pathData="M54,32v44" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M60,37h11a2,2 0,0 1,2 2v30a2,2 0,0 1,-2 2h-11a2,2 0,0 1,-2 -2v-30a2,2 0,0 1,2 -2z" />
+</vector>

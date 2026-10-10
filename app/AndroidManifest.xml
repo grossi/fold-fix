@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="app.foldfix"
+    android:versionCode="1"
+    android:versionName="1.0.0">
+
+    <uses-sdk android:minSdkVersion="33" android:targetSdkVersion="35" />
+
+    <!-- directBootAware: the fix must also work on the lock screen right after a reboot. -->
+    <application
+        android:label="@string/app_name"
+        android:icon="@mipmap/ic_launcher"
+        android:allowBackup="false"
+        android:directBootAware="true"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.FoldFix">
+
+        <!-- The system's WindowManager extensions (rear-display sessions); optional, see RearDisplay. -->
+        <uses-library android:name="androidx.window.extensions" android:required="false" />
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Invisible: starts or ends rear-display mode, which only the top app may do.
+             Exported only to holders of DUMP, i.e. the adb shell (for testing); apps can't get
+             DUMP unless it is granted over adb. FoldFix itself can always start its own activity. -->
+        <activity
+            android:name=".Trampoline"
+            android:directBootAware="true"
+            android:exported="true"
+            android:permission="android.permission.DUMP"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:showWhenLocked="true"
+            android:taskAffinity="app.foldfix.trampoline"
+            android:launchMode="singleInstance"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|density|keyboardHidden|uiMode"
+            android:theme="@style/Theme.FoldFix.Invisible" />
+
+        <service
+            android:name=".FoldService"
+            android:directBootAware="true"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service" />
+        </service>
+    </application>
+</manifest>
