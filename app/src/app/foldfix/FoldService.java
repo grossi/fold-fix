@@ -25,6 +25,9 @@ import android.view.accessibility.AccessibilityWindowInfo;
  *
  * <p>It never fights other apps: Pixel Camera's rear-screen selfie mode uses the same state and
  * dialog, so the service only confirms, cancels or ends requests it made itself.
+ *
+ * <p>While the phone is closed on the outer screen, {@link RotationFix} keeps landscape the right
+ * way up (rear-display mode turns it upside down).
  */
 public class FoldService extends AccessibilityService implements SensorEventListener {
     static final String TAG = "FoldFix";
@@ -50,6 +53,7 @@ public class FoldService extends AccessibilityService implements SensorEventList
 
     SensorManager sm;
     RearDisplay rd;
+    RotationFix rotation;
     boolean running;
     Boolean closed;
     long lastLaunch, lastRequest;
@@ -60,6 +64,7 @@ public class FoldService extends AccessibilityService implements SensorEventList
         running = true;
         rd = RearDisplay.get(this);
         rd.addListener(reconcile);
+        rotation = new RotationFix(this);
         sm = getSystemService(SensorManager.class);
         sm.unregisterListener(this);  // in case the system connects the same instance twice
         Sensor hall = Hardware.findHallSensor(sm);
@@ -93,6 +98,7 @@ public class FoldService extends AccessibilityService implements SensorEventList
     void reconcile() {
         h.removeCallbacks(reconcile);
         if (!running || closed == null) return;
+        rotation.setActive(closed && rd.isRearActive());
         if (rd.backend() == null) {
             setStatus("No rear-display access: run the one-time adb command");
             return;  // can only change after a restart
@@ -234,6 +240,7 @@ public class FoldService extends AccessibilityService implements SensorEventList
         h.removeCallbacks(reconcile);
         if (sm != null) sm.unregisterListener(this);
         if (rd != null) rd.removeListener(reconcile);
+        if (rotation != null) rotation.setActive(false);
         status = null;
         hallClosed = null;
     }

@@ -2,5 +2,5 @@
 <resources>
     <string name="app_name">FoldFix</string>
     <string name="service_summary">Switches to the outer screen when the phone is closed.</string>
-    <string name="service_description">For Pixel Fold phones whose hinge sensor is broken. FoldFix uses the hall (magnet) sensor to tell whether the phone is closed and turns on the outer screen through rear-display mode. Android asks \"Switch screens?\" every time; FoldFix answers that dialog for you. It only reads System UI\'s \"Switch screens?\" dialog and never looks at other apps.</string>
+    <string name="service_description">For Pixel Fold phones whose hinge sensor is broken. FoldFix uses the hall (magnet) sensor to tell whether the phone is closed and turns on the outer screen through rear-display mode. Android asks \"Switch screens?\" every time; FoldFix answers that dialog for you. It also keeps landscape the right way up on the outer screen. It only reads System UI\'s \"Switch screens?\" dialog and never looks at other apps.</string>
 </resources>

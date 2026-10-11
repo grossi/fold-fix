@@ -119,6 +119,7 @@ That's it. FoldFix starts by itself at every boot, even before you unlock the ph
 - Nothing to do. Fold and unfold as usual.
 - **Restart with the phone closed**, if your phone only detects the outer screen when it starts up closed. You can restart from the outer screen's power menu.
 - Other apps that use the outer screen on purpose, like Pixel Camera's rear-camera selfie mode, keep working.
+- Landscape works on the outer screen (fullscreen video, auto-rotate). When an app first turns sideways, it can briefly show upside down before FoldFix corrects it. See [Limitations](#limitations).
 - After an Android update, open FoldFix once and check that everything is still OK.
 
 ## Troubleshooting
@@ -190,6 +191,7 @@ After uninstalling, only a restart helps.
 - **Restart with the phone closed.** On some phones, the outer screen is only detected when the phone boots closed. That's decided by the bootloader, before any app runs, and it also points to damage in the hinge cable. Phones with only a dead hinge sensor may not have this problem.
 - **No half-open postures.** Tabletop mode and apps that adapt to a half-folded phone need the hinge angle.
 - **No fold/unfold animation.** It's driven by the hinge angle too.
+- **Landscape on the outer screen isn't seamless.** Rear-display mode is made for an open phone turned around, so Android turns landscape upside down in it. FoldFix corrects that, but it can't see which orientation an app asks for. When an app first turns sideways (going fullscreen with the phone already sideways), the picture can show upside down for about half a second. An app that goes back to portrait while you hold the phone sideways stays in landscape until you turn the phone upright.
 - **Unofficial interfaces.** FoldFix relies on private details of the system's window-manager extensions library and on the layout of SystemUI's dialog. An Android update could break it.
 - **Tested on one setup.** See [Tested on](#tested-on).
 - **It's a workaround.** The real fix is a hardware repair of the hinge flex cable or sensor.
@@ -206,16 +208,17 @@ It might also help **other foldables** with the same failure (dead hinge-angle s
 
 ## Privacy and permissions
 
-To enable an accessibility service, Android shows a strong warning that the app can view and control your screen. That's because accessibility services *could* read anything on screen. FoldFix uses the service for three things:
+To enable an accessibility service, Android shows a strong warning that the app can view and control your screen. That's because accessibility services *could* read anything on screen. FoldFix uses the service for four things:
 
 1. starting automatically at boot and staying running,
 2. opening its own invisible screen from the background (Android only accepts a screen switch from the app in the foreground),
-3. finding and tapping SystemUI's "Switch screens?" dialog.
+3. finding and tapping SystemUI's "Switch screens?" dialog,
+4. keeping landscape the right way up on the outer screen, with an invisible, zero-size overlay that only tells Android which orientation to use.
 
 FoldFix:
 
 - only looks at System UI. Its accessibility configuration limits events to `com.android.systemui`. To find the dialog, it only opens system windows, and only searches those that belong to System UI, by view ID. It never opens other apps' windows, and it doesn't read, log or store any text from the screen or anything you type.
-- reads the hall-effect and hinge-angle sensors.
+- reads the hall-effect and hinge-angle sensors, and the orientation sensor that auto-rotate uses.
 - requests **no Android permissions**, not even internet access. It collects no data and has no analytics or ads.
 - stores one setting on the phone: whether its own rear-display request may still be active.
 - is open source. You can read the code and [build it yourself](#build-from-source).

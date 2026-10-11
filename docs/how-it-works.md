@@ -11,8 +11,9 @@ Everything else exists to make those two steps reliable:
 
 - getting the request accepted without special permissions,
 - answering the confirmation dialog nobody can see,
-- recovering from fast fold/unfold sequences, and
-- never leaving a request behind.
+- recovering from fast fold/unfold sequences,
+- never leaving a request behind, and
+- keeping landscape the right way up, which rear-display mode gets wrong on a closed phone.
 
 The code is in `app/src/app/foldfix/`:
 
@@ -20,6 +21,7 @@ The code is in `app/src/app/foldfix/`:
 | --- | --- |
 | `FoldService.java` | The accessibility service: hall sensor, reconcile loop, dialog tapping |
 | `RearDisplay.java` | Starts and ends rear-display mode (two backends), tracks whether the request is FoldFix's |
+| `RotationFix.java` | Corrects landscape on the outer screen while the phone is closed |
 | `Trampoline.java` | Invisible activity that makes the request or cancel as the top app |
 | `Hardware.java` | Finds the hall sensor; checks whether the outer display exists |
 | `MainActivity.java` | The status and setup screen |
@@ -230,6 +232,30 @@ How the check works:
 - It counts built-in displays, including ones that are currently off. On Android 17 (API 37) and newer it uses the public `DisplayManager.DISPLAY_CATEGORY_BUILT_IN_DISPLAYS` category. On older versions it uses the hidden category string `android.hardware.display.category.ALL_INCLUDING_DISABLED`. Both return 2 displays when the outer panel was detected.
 - It runs when the service starts, before every request, and again in the trampoline right before the call, so no caller can trigger a request without it.
 - A positive result is kept for the life of the process. The panel can't disappear without a reboot, but the display list is briefly incomplete during every screen switch.
+
+### 8. Landscape on the outer screen
+
+Rear-display mode is meant for an open phone turned around, so that the outer screen faces someone else. In that posture the orientation sensor's landscape directions come out mirrored, so Android turns them around in rear-display states. It lists those states in a framework setting, which is `[3, 5]` on the Pixel Fold:
+
+```text
+config_deviceStatesToReverseDefaultDisplayRotationAroundZAxis
+```
+
+On a closed phone the outer screen faces the user the usual way, so the reversal is wrong: anything the sensor rotates lands upside down. That covers fullscreen video (`SCREEN_ORIENTATION_SENSOR_LANDSCAPE`), auto-rotate, and the rotate button. Turning the phone around just flips it to the other wrong side. Portrait isn't affected, because the reversal only swaps rotations 90 and 270.
+
+Apps can't request CLOSED (`SecurityException`, it isn't available for app requests), so FoldFix corrects the rotation instead. While the phone is closed in rear-display mode, `RotationFix` keeps an invisible accessibility overlay attached: zero size, not focusable, not touchable. No permission is needed. A window above the apps that sets `screenOrientation` decides the orientation for the whole display. So:
+
+- While the phone is held sideways and the display is already in landscape, the overlay asks for the landscape the phone is really in (`LANDSCAPE` for rotation 90, `REVERSE_LANDSCAPE` for 270). The value comes from the device orientation sensor (type 27), the one Android's auto-rotate uses.
+- Otherwise it asks for nothing (`UNSPECIFIED`), and the app decides as usual. It never turns an app that is in portrait, and it steps aside for the lock screen and while the screen is off.
+
+It only runs if the framework setting lists a rear-display state, so it can't introduce a flip on a system that doesn't reverse.
+
+The overlay stays attached and only its orientation changes. That way a correction is a single layout update, which takes effect within a few tens of milliseconds. Adding a window at that moment took about half a second.
+
+What it can't fix, because other apps' orientation requests aren't visible to FoldFix:
+
+- When an app turns to landscape while the phone is already sideways, Android picks the wrong side first. The correction follows once that turn finishes, about half a second later.
+- While the overlay holds landscape, an app that goes back to portrait (leaving fullscreen) stays in landscape until the phone is turned upright.
 
 ## Testing and logs
 
