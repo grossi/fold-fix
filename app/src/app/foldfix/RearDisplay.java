@@ -196,11 +196,29 @@ final class RearDisplay implements Reconciler.Rear {
      * Makes the active request FoldFix's to end, like one of its own, if it isn't already. Called
      * by FoldService when it finds another app's request while the phone is closed: that app has
      * no use for it there, and nothing else would ever end it (requests are sticky, see above).
+     * Returns false if that has to wait: a request of ours has just ended or been cancelled, and
+     * what looks active is most likely that one (see {@link Ownership#isEnding} for how long).
      */
     @Override
-    public void adopt() {
-        if (!own.canAdopt(isRearActive())) return;
-        FoldLog.i("adopting the active rear display request (" + describeState() + ")");
+    public boolean adopt() {
+        long now = SystemClock.elapsedRealtime();
+        if (own.canAdopt(isRearActive(), now)) {
+            FoldLog.i("adopting the active rear display request (" + describeState() + ")");
+            own.adopt();
+        }
+        return !own.isEnding(now);
+    }
+
+    /**
+     * The same when the phone is opened with rear-display mode on: the active request was active
+     * while the phone was closed, so it is FoldFix's to end, also if FoldFix's own request is
+     * still waiting for its dialog behind another app's (see {@link Ownership#canAdoptOnOpen}).
+     */
+    @Override
+    public void adoptOnOpen() {
+        if (!own.canAdoptOnOpen(isRearActive())) return;
+        FoldLog.i("opened with rear display on before a request of ours was reported active: "
+                + "taking the active one over (" + describeState() + ")");
         own.adopt();
     }
 
@@ -396,7 +414,7 @@ final class RearDisplay implements Reconciler.Rear {
         Method start = area.getClass().getMethod("startRearDisplaySession", Activity.class, extConsumer);
         Object session = consumer(v -> {
             FoldLog.i("rear display session " + v);
-            if ((Integer) v == SESSION_INACTIVE) own.requestEnded(gen);
+            if ((Integer) v == SESSION_INACTIVE) own.requestEnded(gen, SystemClock.elapsedRealtime());
             else own.requestActivated(gen);
         });
         try {
@@ -458,7 +476,9 @@ final class RearDisplay implements Reconciler.Rear {
         Class<?> cbType = Class.forName("android.hardware.devicestate.DeviceStateRequest$Callback");
         Object cb = Proxy.newProxyInstance(cbType.getClassLoader(), new Class<?>[]{cbType},
                 (proxy, m, args) -> {
-                    if (m.getName().equals("onRequestCanceled")) main.post(() -> own.requestEnded(gen));
+                    if (m.getName().equals("onRequestCanceled")) {
+                        main.post(() -> own.requestEnded(gen, SystemClock.elapsedRealtime()));
+                    }
                     if (m.getName().equals("onRequestActivated")) main.post(() -> own.requestActivated(gen));
                     return objectMethod(proxy, m.getName(), args);
                 });
@@ -501,7 +521,7 @@ final class RearDisplay implements Reconciler.Rear {
         own.onRearDisplay(active, SystemClock.elapsedRealtime());
         if (own.isInheritedGone(active)) {
             FoldLog.i("earlier or adopted request is gone");
-            own.clear();  // rear display is off, so the request we had to end has ended
+            own.inheritedGone();  // rear display is off, so the request we had to end has ended
         }
         notifyListeners();
     }

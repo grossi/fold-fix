@@ -276,6 +276,18 @@ final class ScenarioTest {
             ends(p, REAR, FOLDFIX, true);
         });
 
+        t.test("taking the place of FoldFix's own on the closed phone: taken over at once", () -> {
+            SimPhone p = SimPhone.closedOnOuter();
+            p.otherAppRequests(REAR_OUTER_DEFAULT);
+            // Our request's end is followed by a report that rear-display mode is (still) on, as on
+            // the phone: so this isn't the moment before it goes off.
+            same("the other request", "adopting the active rear display request", p.took());
+            ends(p, REAR_OUTER_DEFAULT, OTHER, true);
+            p.hall(OPEN);
+            p.trampoline();
+            ends(p, OPENED, NOBODY, false);
+        });
+
         t.test("the status screen's button ends another app's request; nothing follows its next one", () -> {
             SimPhone p = SimPhone.closedOnOuter();
             p.hall(OPEN);
@@ -531,11 +543,11 @@ final class ScenarioTest {
         t.test("selfie button on the closed phone: FoldFix's request ended, requested again", () -> {
             SimPhone p = SimPhone.closedOnOuter();
             p.otherAppEnds();
-            // current behaviour, pinned as found: FoldFix hears that its request ended a moment before
-            // it sees rear-display mode go off, and for that moment takes its own request over. On
-            // the phone the two arrive in this order in most taps, not in all.
-            same("the tap", lines("adopting the active rear display request", "earlier or adopted request is gone",
-                    "request rear display (try 1)", "status: Closed: switching to the outer screen"), p.took());
+            // FoldFix hears that its request ended a moment before rear-display mode is reported off
+            // (on the phone in most taps, not in all). What is still on for that moment isn't
+            // another app's request, and isn't taken over.
+            same("the tap", lines("request rear display (try 1)", "status: Closed: switching to the outer screen"),
+                    p.took());
             p.trampoline();
             p.after(1_050);
             p.dialogShows();
@@ -577,28 +589,144 @@ final class ScenarioTest {
             ends(p, OPENED, NOBODY, false);
         });
 
-        t.test("overtaken, and the phone is opened before the dialog shows", () -> {
-            SimPhone p = SimPhone.closedOnOuter();
-            p.otherAppEnds();
-            p.trampoline();
-            p.after(70);
-            p.otherAppRequests(REAR_OUTER_DEFAULT);
-            p.took();
+        t.test("overtaken, and the phone is opened before the dialog shows: both requests go", () -> {
+            SimPhone p = overtaken();
             p.after(100);
             p.hall(OPEN);
-            // current behaviour, pinned as found: the waiting request makes the active one count as
-            // ours, so a cancel is sent. The model has it end Camera's request, as the system ends
-            // whatever is active; the docs say only FoldFix's own is dropped here.
-            same("on open", lines("hall open", "cancel rear display (try 1)",
+            // Camera's request was active while the phone was closed, so it is FoldFix's to end. The
+            // cancel ends it, as the system ends whatever is active (seen on the phone, too).
+            same("on open", lines("hall open", TAKEN_OVER_ON_OPEN, "cancel rear display (try 1)",
                     "status: Open: switching back to the inner screen"), p.took());
             p.trampoline();
             same("the trampoline arrives", "rear display request cancelled", p.took());
             same("the active request is of", NOBODY, p.holder);
             p.after(100);
-            p.dialogShows();
+            p.dialogShows();  // of our own request, which no cancel reaches
             same("the dialog shows", "clicked Cancel", p.took());
             ends(p, OPENED, NOBODY, false);
         });
+
+        t.test("overtaken, and the phone is opened with the dialog up: Cancel in it, then the other request is ended", () -> {
+            SimPhone p = overtaken();
+            p.after(100);
+            p.dialogUpUnnoticed();
+            p.hall(OPEN);
+            // Dropping our own request with its dialog doesn't make Camera's request Camera's again.
+            same("on open", lines("hall open", TAKEN_OVER_ON_OPEN, "clicked Cancel",
+                    "status: Open: switching back to the inner screen", "cancel rear display (try 1)"), p.took());
+            same("the active request is of", OTHER, p.holder);
+            yes("and FoldFix's to end", p.own.hasOwnRequest());
+            p.trampoline();
+            same("the trampoline arrives", "rear display request cancelled", p.took());
+            ends(p, OPENED, NOBODY, false);
+            p.after(3_000);
+            same("once 3 s have passed since the request", "status: Open: inner screen on", p.took());
+        });
+
+        t.test("overtaken, opened, and the dialog shows before the cancel arrives: still both go", () -> {
+            SimPhone p = overtaken();
+            p.hall(OPEN);
+            p.dialogShows();
+            same("on open, and the dialog", lines("hall open", TAKEN_OVER_ON_OPEN, "cancel rear display (try 1)",
+                    "status: Open: switching back to the inner screen", "clicked Cancel"), p.took());
+            p.trampoline();
+            same("the trampoline arrives", "rear display request cancelled", p.took());
+            ends(p, OPENED, NOBODY, false);
+        });
+
+        t.test("overtaken, opened, and the other request ends by itself: only our dialog is left to cancel", () -> {
+            SimPhone p = overtaken();
+            p.hall(OPEN);
+            p.took();
+            p.otherAppEnds();  // System UI's control, say, before our cancel arrives
+            same("it ends", "earlier or adopted request is gone", p.took());
+            yes("our waiting request is still ours", p.own.hasOwnRequest());
+            p.trampoline();
+            same("the trampoline arrives", "nothing active to cancel, request still waiting for its dialog", p.took());
+            p.dialogShows();
+            same("the dialog shows", "clicked Cancel", p.took());
+            ends(p, OPENED, NOBODY, false);
+            // What another app asks for from here on is its own again.
+            p.after(5_000);
+            p.otherAppRequests(REAR_OUTER_DEFAULT);
+            p.after(20_000);
+            ends(p, REAR_OUTER_DEFAULT, OTHER, false);
+        });
+
+        t.test("opened, closed and opened again within a second, Camera on screen: back on the inner screen", () -> {
+            SimPhone p = openedWithCameraOnScreen();
+            p.after(350);
+            p.hall(CLOSED);
+            p.trampoline();                          // our new request waits for its dialog
+            p.after(100);
+            p.otherAppRequests(REAR_OUTER_DEFAULT);  // Camera's repeat request gets in first
+            p.after(60);
+            p.dialogUpUnnoticed();
+            p.took();
+            p.hall(OPEN);
+            p.trampoline();
+            same("the second opening", lines("hall open", TAKEN_OVER_ON_OPEN, "clicked Cancel",
+                    "status: Open: switching back to the inner screen", "cancel rear display (try 1)",
+                    "rear display request cancelled"), p.took());
+            p.after(600);
+            p.otherAppRequests(REAR_OUTER_DEFAULT);  // and Camera asks once more
+            yes("followed up", p.took().startsWith("another app turned rear display on 600 ms after our cancel: ending that once"));
+            p.curtainArrives();
+            ends(p, OPENED, NOBODY, false);
+        });
+
+        t.test("opened a moment after our dialog was confirmed, before the request is reported active: ended", () -> {
+            SimPhone p = new SimPhone();
+            p.hall(CLOSED);
+            p.trampoline();
+            p.took();
+            p.activationLate = true;
+            p.dialogShows();  // confirmed, and rear display is on
+            same("the dialog shows", lines("clicked Confirm", "status: Closed: outer screen on"), p.took());
+            p.hall(OPEN);
+            // For all FoldFix knows at this moment, the active request could be another app's.
+            same("on open", lines("hall open", TAKEN_OVER_ON_OPEN, "cancel rear display (try 1)",
+                    "status: Open: switching back to the inner screen"), p.took());
+            p.activationArrives();
+            p.trampoline();
+            same("the trampoline arrives", "rear display request cancelled", p.took());
+            ends(p, OPENED, NOBODY, false);
+        });
+
+        t.test("our request reported active a moment after rear display came on, phone still closed: nothing more", () -> {
+            SimPhone p = new SimPhone();
+            p.hall(CLOSED);
+            p.trampoline();
+            p.activationLate = true;
+            p.dialogShows();
+            p.took();
+            p.activationArrives();
+            p.after(60_000);
+            same("a minute", "", p.took());
+            ends(p, REAR, FOLDFIX, true);
+            p.hall(OPEN);
+            p.trampoline();
+            same("on open", lines("hall open", "cancel rear display (try 1)",
+                    "status: Open: switching back to the inner screen", "rear display request cancelled",
+                    "status: Open: inner screen on"), p.took());
+        });
+    }
+
+    static final String TAKEN_OVER_ON_OPEN =
+            "opened with rear display on before a request of ours was reported active: taking the active one over";
+
+    /**
+     * A closed phone on which Camera's selfie button ended FoldFix's request, FoldFix asked again,
+     * and Camera's own request became active while FoldFix's is still waiting for its dialog.
+     */
+    private static SimPhone overtaken() {
+        SimPhone p = SimPhone.closedOnOuter();
+        p.otherAppEnds();
+        p.trampoline();
+        p.after(70);
+        p.otherAppRequests(REAR_OUTER_DEFAULT);
+        p.took();
+        return p;
     }
 
     private static void lateLaunches(Suite t) {
@@ -629,6 +757,25 @@ final class ScenarioTest {
             p.trampoline();
             same("the cancel arrives", "dropping stale cancel: no request of FoldFix's to end", p.took());
             ends(p, REAR_OUTER_DEFAULT, OTHER, false);
+        });
+
+        t.test("a cancel arriving after another request replaced one FoldFix took over: ends it all the same", () -> {
+            SimPhone p = SimPhone.closedOnOuter().restarted();  // the request is an earlier process's
+            p.hall(CLOSED);
+            p.hall(OPEN);
+            p.after(1_100);
+            p.took();
+            p.otherAppRequests(REAR_OUTER_DEFAULT);
+            // A known limit: a request FoldFix took over has no callback of its own, and rear-display
+            // mode never went off, so nothing tells FoldFix that the active request is a new one.
+            // It takes a request made on top of an active one, in the moment between the unfolding
+            // and FoldFix's cancel. Pixel Camera makes none while the mode is on.
+            same("the other request", "", p.took());
+            yes("still taken for FoldFix's", p.own.hasOwnRequest());
+            p.after(900);  // the service's own retry, 200 ms later, would end it as well
+            p.trampoline();
+            same("the cancel arrives", lines("rear display request cancelled", "status: Open: inner screen on"), p.took());
+            ends(p, OPENED, NOBODY, false);
         });
 
         t.test("a cancel arriving after the service was turned off: still goes through", () -> {
@@ -672,10 +819,9 @@ final class ScenarioTest {
         t.test("adb's forced cancel on the closed phone: goes through, and FoldFix requests again", () -> {
             SimPhone p = SimPhone.closedOnOuter();
             p.adbCancel(true);
-            // current behaviour, pinned as found: as with the selfie button, the request just cancelled
-            // is taken over for the moment until rear-display mode is seen off.
-            same("the cancel", lines("rear display request cancelled", "adopting the active rear display request",
-                    "earlier or adopted request is gone", "request rear display (try 1)",
+            // As with the selfie button: the request just cancelled isn't taken over for the moment
+            // until rear-display mode is reported off.
+            same("the cancel", lines("rear display request cancelled", "request rear display (try 1)",
                     "status: Closed: switching to the outer screen"), p.took());
             p.trampoline();
             p.dialogShows();
@@ -823,6 +969,22 @@ final class ScenarioTest {
             no("saved", p.saved);
             p.hall(OPEN);
             same("on open", lines("hall open", "status: Open: inner screen on"), p.took());
+        });
+
+        t.test("restarted while another app's request is active and its own was waiting: ends it on open", () -> {
+            SimPhone old = SimPhone.closedOnOuter();
+            old.otherAppEnds();
+            old.trampoline();
+            old.otherAppRequests(REAR_OUTER_DEFAULT);  // overtaken; a waiting request dies with its process
+            SimPhone p = old.restarted();
+            p.hall(CLOSED);
+            same("on start", lines("hall closed", "status: Closed: outer screen on"), p.took());
+            p.hall(OPEN);
+            p.trampoline();
+            same("on open", lines("hall open", "cancel rear display (try 1)",
+                    "status: Open: switching back to the inner screen", "rear display request cancelled",
+                    "status: Open: inner screen on"), p.took());
+            ends(p, OPENED, NOBODY, false);
         });
 
         t.test("restarted while open with another app's request: left alone", () -> {

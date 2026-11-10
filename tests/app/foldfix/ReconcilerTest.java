@@ -44,6 +44,27 @@ final class ReconcilerTest {
             same("looks for the dialog", 0, p.dialogLooks);
         });
 
+        t.test("closed, on, one of ours ended a moment ago: no take-over yet, look again in 2 s", () -> {
+            FakePhone p = new FakePhone();
+            p.rear = p.ending = true;  // its callback came before rear display is reported off
+            same("step", lines("look again in 2000 ms", "status: Closed: outer screen on"), p.step(CLOSED));
+            p.ending = false;          // it stayed on: another request took its place
+            same("2 s later", lines("adopt", "status: Closed: outer screen on"), p.step(CLOSED));
+        });
+
+        t.test("opened with rear display on: the active request is taken over before the step", () -> {
+            FakePhone p = new FakePhone();
+            p.rear = true;
+            p.rules.onFold(true);
+            same("on open", Arrays.asList("adopt on open"), p.did);
+            p.did.clear();
+            p.rules.onFold(false);  // closed, or the first reading: an open phone is left as it is
+            same("otherwise", Arrays.asList(), p.did);
+            p.known = false;
+            p.rules.onFold(true);
+            same("device state not known yet", Arrays.asList(), p.did);
+        });
+
         t.test("closed, on through another app's request, ours still waiting: confirm the dialog once it shows", () -> {
             FakePhone p = new FakePhone();
             p.rear = p.ours = p.live = p.waiting = true;
@@ -208,7 +229,7 @@ final class ReconcilerTest {
             FakePhone p = afterOurCancel(600);
             p.step(OPEN);
             yes("used up", p.rules.followedUp);
-            p.rules.onFold();
+            p.rules.onFold(false);
             no("used up after a fold", p.rules.followedUp);
             same("this opening's cancel is forgotten", 0L, p.rules.cancelSentAt);
             same("requests looked at", 0, p.rules.otherSeen);
@@ -280,7 +301,7 @@ final class ReconcilerTest {
             FakePhone p = new FakePhone();
             p.launchTimes(CLOSED, 20_000);
             same("tries", 5, p.rules.tries);
-            p.rules.onFold();
+            p.rules.onFold(false);
             same("tries after a fold", 0, p.rules.tries);
             p.rear = p.ours = true;
             yes("a cancel goes out at once", p.step(OPEN).startsWith("launch cancel (try 1)"));
@@ -290,7 +311,7 @@ final class ReconcilerTest {
             FakePhone p = new FakePhone();
             p.step(CLOSED);
             p.pass(500);
-            p.rules.onFold();
+            p.rules.onFold(false);
             same("last request", p.uptime - 500, p.rules.lastRequest);
             p.dialog = true;  // its dialog can still pop up after the phone was opened
             yes("the dialog is cancelled", p.step(OPEN).startsWith("tap Cancel"));
@@ -452,12 +473,13 @@ final class ReconcilerTest {
             same("3000 ms after the launch", lines("tap Confirm", "status: Closed: outer screen on"), p.step(CLOSED));
         });
 
-        t.test("ours overtaken, and given up on after 10 s: its dialog is no longer confirmed", () -> {
+        t.test("ours overtaken, and given up on after 10 s: a dialog is no longer looked for", () -> {
             FakePhone p = new FakePhone();
             p.rear = p.ours = p.dialog = true;
             p.live = p.waiting = false;
-            // current behaviour, pinned as found: the dialog then stays on the outer screen, in front of
-            // the user, until someone answers it.
+            // By then the request is taken for lost. On the phone its dialog showed within half a
+            // second each time and was confirmed; one that went with the screen turning off didn't
+            // come back. A dialog up at this point couldn't be told from another app's.
             same("step", "status: Closed: outer screen on", p.step(CLOSED));
             same("looks for the dialog", 0, p.dialogLooks);
         });
@@ -508,7 +530,7 @@ final class ReconcilerTest {
             FakePhone p = new FakePhone();
             p.step(CLOSED);  // request launched
             p.pass(300);
-            p.rules.onFold();
+            p.rules.onFold(false);
             p.ours = true;
             // current behaviour, pinned as found: the fold reset the launch time, so it looks again in
             // 2 s, not 200 ms. The dialog is found sooner through its accessibility event.
@@ -564,7 +586,7 @@ final class ReconcilerTest {
      * never reports), and of the timings that matter.
      */
     private static void everyState(Each each) {
-        for (int bits = 0; bits < 1 << 15; bits++) {
+        for (int bits = 0; bits < 1 << 16; bits++) {
             FakePhone p = new FakePhone();
             State s = new State();
             s.closed = bit(bits, 0);
@@ -587,6 +609,7 @@ final class ReconcilerTest {
                 p.rules.tries = 5;
                 if (!s.recentLaunch) p.rules.lastLaunch = p.uptime - 10_000;
             }
+            p.ending = bit(bits, 15);
             s.cancelEnded = bit(bits, 14);
             if (s.cancelEnded) {
                 p.rules.cancelSentAt = p.realtime - 1_500;
@@ -601,7 +624,8 @@ final class ReconcilerTest {
             } catch (Suite.Failure f) {
                 throw new Suite.Failure(f.getMessage() + "\nin state: closed=" + s.closed + " known=" + p.known
                         + " backend=" + p.backend + " rear=" + p.rear + " ours=" + p.ours + " live=" + p.live
-                        + " waiting=" + p.waiting + " cancelPending=" + p.cancelPending + " available=" + p.available
+                        + " waiting=" + p.waiting + " cancelPending=" + p.cancelPending + " ending=" + p.ending
+                        + " available=" + p.available
                         + " outer=" + p.outer + " dialog=" + p.dialog + " recentLaunch=" + s.recentLaunch
                         + " recentRequest=" + s.recentRequest + " manyTries=" + s.manyTries
                         + " cancelEnded=" + s.cancelEnded + "\nit did: " + s.did.replace("\n", "; "));
@@ -681,7 +705,10 @@ final class ReconcilerTest {
         }));
 
         t.test("a take-over only on the closed phone, of an active request that isn't ours", () -> everyState((p, s) -> {
-            same("adopt", s.closed && p.backend != null && p.known && p.rear && !p.ours, p.did("adopt"));
+            boolean where = s.closed && p.backend != null && p.known && p.rear && !p.ours;
+            same("adopt", where && !p.ending, p.did("adopt"));
+            // Held up by a request of ours that has just ended: looked at again once that is settled.
+            if (where && p.ending) yes("looks again in 2 s", s.did.contains("look again in 2000 ms"));
         }));
 
         t.test("every step that acts ends with a status, and one status only", () -> everyState((p, s) -> {

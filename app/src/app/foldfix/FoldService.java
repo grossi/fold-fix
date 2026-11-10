@@ -125,8 +125,9 @@ public class FoldService extends AccessibilityService implements SensorEventList
     void onHall(boolean c) {
         if (closed != null && closed == c) return;
         FoldLog.i("hall " + name(c) + (simulatedHall != null ? " (simulated)" : ""));
+        boolean opened = closed != null && !c;  // not the first reading: the phone was seen closed
         closed = hallClosed = c;
-        rules.onFold();
+        rules.onFold(opened);
         reconcile();
     }
 

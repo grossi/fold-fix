@@ -35,7 +35,9 @@ final class Reconciler {
         boolean isCancelPending();
         long endingCancelAt();
         int activations();
-        void adopt();
+        /** False if taking the active request over has to wait a moment (see {@link RearDisplay#adopt}). */
+        boolean adopt();
+        void adoptOnOpen();
     }
 
     /** The rest of what the rules read and do: {@link FoldService}. */
@@ -78,8 +80,13 @@ final class Reconciler {
         this.phone = phone;
     }
 
-    /** The phone was closed or opened: the retry schedule and the opening's bookkeeping start over. */
-    void onFold() {
+    /**
+     * The phone was closed or opened: the retry schedule and the opening's bookkeeping start over.
+     * {@code opened} says that it was closed until now and is open. Rear-display mode that is on
+     * at that moment was on while the phone was closed, so the active request is ours to end.
+     */
+    void onFold(boolean opened) {
+        if (opened && rd.isKnown()) rd.adoptOnOpen();
         lastLaunch = 0;
         tries = 0;
         cancelSentAt = 0;
@@ -116,8 +123,10 @@ final class Reconciler {
                     if (now - lastLaunch < DIALOG_WAIT_MS) phone.lookAgainIn(POLL_MS);
                 }
                 // Another app's request can't be meant for a closed phone, and it never ends by
-                // itself: take it over, so that opening the phone ends it like one of ours.
-                if (!ours) rd.adopt();
+                // itself: take it over, so that opening the phone ends it like one of ours. Not
+                // in the moment between the end of a request of ours and rear-display mode being
+                // reported off; looked at again in case it stays on.
+                if (!ours && !rd.adopt()) phone.lookAgainIn(Ownership.CANCEL_EFFECT_MS);
                 tries = 0;
                 phone.setStatus("Closed: outer screen on");
                 return;

@@ -15,8 +15,9 @@ import java.util.List;
  * and the "Switch screens?" dialog. Nothing in it happens by itself. A test says when a launch
  * arrives, when the dialog shows, and what another app does, so that late and overtaken steps can
  * be played through. What the system reports back reaches FoldFix right after the step that
- * caused it, a request's own callback before the change of the device state, as seen on a Pixel
- * Fold on Android 17.
+ * caused it, a request's own callback before the change of the device state. On a Pixel Fold on
+ * Android 17 that is the usual order for a request that ended; for one that became active either
+ * order is as common, so a test can hold that callback back ({@link #activationLate}).
  *
  * <p>Every line FoldFix would write to its history is kept, without the device state that the
  * real lines of launches and take-overs end with.
@@ -35,6 +36,13 @@ final class SimPhone implements Reconciler.Rear, Reconciler.Phone {
     /** FoldFix's request that is active, and the one waiting for its dialog (0: none). */
     private int activeGen, waitingGen;
     boolean dialog;
+    /**
+     * Set to have the system report FoldFix's request as active only at {@link #activationArrives},
+     * after the device state. On the phone that callback comes up to 0.1 s after the state in
+     * about half the closings, and just before it in the others.
+     */
+    boolean activationLate;
+    private Runnable heldActivation;
     boolean hasBackend = true, known = true, available = true, outer = true;
     /** Whether the system counts FoldFix as the top app: if not, it refuses requests and cancels. */
     boolean topApp = true;
@@ -101,8 +109,9 @@ final class SimPhone implements Reconciler.Rear, Reconciler.Phone {
     void hall(boolean c) {
         if (closed != null && closed == c) return;
         log.add("hall " + (c ? "closed" : "open"));
+        boolean opened = closed != null && !c;
         closed = c;
-        rules.onFold();
+        rules.onFold(opened);
         reconcile();
         settle();
     }
@@ -151,6 +160,20 @@ final class SimPhone implements Reconciler.Rear, Reconciler.Phone {
         settle();
     }
 
+    /** The callback held back by {@link #activationLate} arrives. */
+    void activationArrives() {
+        if (heldActivation == null) throw new IllegalStateException("no activation was held back");
+        heldActivation.run();
+        heldActivation = null;
+        settle();
+    }
+
+    /** The dialog is up, but the service hasn't heard of it yet: something else happens first. */
+    void dialogUpUnnoticed() {
+        if (waitingGen == 0) throw new IllegalStateException("no request of FoldFix's is waiting for its dialog");
+        dialog = true;
+    }
+
     boolean curtainStarted() {
         return curtain != null;
     }
@@ -176,7 +199,7 @@ final class SimPhone implements Reconciler.Rear, Reconciler.Phone {
         String was = holder;
         int gen = activeGen;
         holder = OTHER;
-        if (was.equals(FOLDFIX)) reports.add(() -> own.requestEnded(gen));  // replaced: its callback says it ended
+        if (was.equals(FOLDFIX)) reports.add(() -> own.requestEnded(gen, real));  // replaced: its callback says it ended
         reports.add(() -> systemState(newState));
         settle();
     }
@@ -269,11 +292,15 @@ final class SimPhone implements Reconciler.Rear, Reconciler.Phone {
             reports.add(() -> {  // it becomes the active request, in place of any other
                 holder = FOLDFIX;
                 activeGen = gen;
-                own.requestActivated(gen);
+                if (activationLate) {
+                    heldActivation = () -> own.requestActivated(gen);
+                } else {
+                    own.requestActivated(gen);
+                }
                 systemState(REAR);
             });
         } else {
-            reports.add(() -> own.requestEnded(gen));
+            reports.add(() -> own.requestEnded(gen, real));
         }
         return true;
     }
@@ -333,9 +360,18 @@ final class SimPhone implements Reconciler.Rear, Reconciler.Phone {
     @Override public int activations() { return own.activations(); }
 
     @Override
-    public void adopt() {
-        if (!own.canAdopt(isRearActive())) return;
-        log.add("adopting the active rear display request");
+    public boolean adopt() {
+        if (own.canAdopt(isRearActive(), real)) {
+            log.add("adopting the active rear display request");
+            own.adopt();
+        }
+        return !own.isEnding(real);
+    }
+
+    @Override
+    public void adoptOnOpen() {
+        if (!own.canAdoptOnOpen(isRearActive())) return;
+        log.add("opened with rear display on before a request of ours was reported active: taking the active one over");
         own.adopt();
     }
 
@@ -385,7 +421,7 @@ final class SimPhone implements Reconciler.Rear, Reconciler.Phone {
         String was = holder;
         int gen = activeGen;
         holder = NOBODY;
-        if (was.equals(FOLDFIX)) reports.add(() -> own.requestEnded(gen));
+        if (was.equals(FOLDFIX)) reports.add(() -> own.requestEnded(gen, real));
         reports.add(() -> systemState(OPENED));
     }
 
@@ -396,7 +432,7 @@ final class SimPhone implements Reconciler.Rear, Reconciler.Phone {
         own.onRearDisplay(active, real);
         if (own.isInheritedGone(active)) {
             log.add("earlier or adopted request is gone");
-            own.clear();
+            own.inheritedGone();
         }
         posted++;
     }

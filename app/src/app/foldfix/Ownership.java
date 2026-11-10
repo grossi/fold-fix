@@ -23,9 +23,9 @@ final class Ownership {
     /** FoldService is about to request, or this process's request is pending or active. */
     private volatile boolean ownRequest;
     /**
-     * FoldFix has to end an active request this process didn't make: an earlier FoldFix process's,
-     * or another app's that was {@linkplain #adopt adopted}. Persisted, because such a request
-     * outlives this process too (requests are sticky, see {@link RearDisplay}).
+     * FoldFix has to end the active request although this process's own isn't known to be it: an
+     * earlier FoldFix process's, or one that was {@linkplain #adopt adopted}. Persisted, because
+     * such a request outlives this process too (requests are sticky, see {@link RearDisplay}).
      */
     private volatile boolean inherited;
     /** Uptime when this process's current request was accepted, 0 if there is none. */
@@ -44,6 +44,11 @@ final class Ownership {
     private long cancelledAt;
     /** Real time of the cancel made here that last turned rear-display mode off; else 0. */
     private volatile long endingCancelAt;
+    /**
+     * Real time when this process's active request was reported ended, until rear-display mode is
+     * next reported; else 0.
+     */
+    private long ownEndedAt;
 
     /** {@code inherited} is what an earlier process saved: a request of FoldFix's may be active. */
     Ownership(boolean inherited, Runnable changed) {
@@ -109,9 +114,33 @@ final class Ownership {
         }
     }
 
-    /** Whether there is a request to {@linkplain #adopt take over}: an active one that isn't ours. */
-    boolean canAdopt(boolean rearActive) {
-        return !hasOwnRequest() && rearActive;
+    /**
+     * Rear-display mode is about to be reported off, as far as can be told: a cancel made here is
+     * {@linkplain #isCancelPending pending}, or this process's active request ended less than
+     * {@link #CANCEL_EFFECT_MS} ago and rear-display mode hasn't been reported since, on or off.
+     * The request's own callback and the cancel's return come just before the device state's.
+     */
+    boolean isEnding(long realtime) {
+        return isCancelPending(realtime) || (ownEndedAt != 0 && realtime - ownEndedAt < CANCEL_EFFECT_MS);
+    }
+
+    /**
+     * Whether there is a request to {@linkplain #adopt take over} on the closed phone: an active
+     * one, while nothing is ours. Not while rear-display mode {@linkplain #isEnding is about to go
+     * off}: what looks active then is most likely the request that has just ended.
+     */
+    boolean canAdopt(boolean rearActive, long realtime) {
+        return !hasOwnRequest() && rearActive && !isEnding(realtime);
+    }
+
+    /**
+     * The same at the moment the phone is opened: rear-display mode is on, so the active request
+     * was active while the phone was closed, and it isn't known to be FoldFix's to end yet. That
+     * is the case while this process's own request is still waiting for its dialog and another
+     * app's became active first, and for a moment after our own dialog was confirmed.
+     */
+    boolean canAdoptOnOpen(boolean rearActive) {
+        return rearActive && !inherited && !sessionActive;
     }
 
     /** Makes the active request FoldFix's to end, like one of its own. */
@@ -137,18 +166,29 @@ final class Ownership {
         if (gen == generation && sessionStart != 0) sessionActive = true;
     }
 
-    /** The system's callback: the request of that generation ended. */
-    void requestEnded(int gen) {
-        if (gen == generation) setOwn(false);
+    /**
+     * The system's callback, at real time {@code realtime}: the request of that generation ended.
+     * If it was the active one, nothing is ours any more: rear-display mode goes off, or another
+     * request has taken its place. One that never became active was dropped with its dialog, and
+     * what is active is what it was: a request FoldFix took over stays FoldFix's to end.
+     */
+    void requestEnded(int gen, long realtime) {
+        if (gen != generation) return;
+        if (sessionActive) {
+            ownEndedAt = realtime;
+            inherited = false;
+        }
+        endSession();
     }
 
     /**
      * A cancel made here at real time {@code at} (taken before the call) went through. Whatever
      * was active is no longer ours to end. The user's own cancel, from the status screen, isn't
-     * one {@link #endingCancelAt} reports.
+     * one {@link #endingCancelAt} reports, and what it ends isn't credited to an earlier cancel
+     * of ours that hadn't shown its effect yet.
      */
     void cancelled(long at, boolean byUser) {
-        if (!byUser) cancelledAt = at;
+        cancelledAt = byUser ? 0 : at;
         generation++;
         setOwn(false);
     }
@@ -158,8 +198,9 @@ final class Ownership {
         setOwn(false);
     }
 
-    /** Rear-display mode was seen on or off. */
+    /** Rear-display mode was reported on or off. */
     void onRearDisplay(boolean active, long realtime) {
+        ownEndedAt = 0;
         if (active && !wasActive) activations++;
         if (!active && wasActive) {
             long since = realtime - cancelledAt;
@@ -171,19 +212,33 @@ final class Ownership {
 
     /**
      * Whether the request FoldFix had to end for an earlier process or another app has ended:
-     * rear-display mode is off, and this process has no request of its own under way.
+     * rear-display mode is off.
      */
     boolean isInheritedGone(boolean rearActive) {
-        return inherited && !ownRequest && !rearActive;
+        return inherited && !rearActive;
+    }
+
+    /** That request has ended. A request of this process that is under way stays ours. */
+    void inheritedGone() {
+        inherited = false;
+        changed.run();
     }
 
     private void setOwn(boolean own) {
-        ownRequest = own;
-        if (!own) {
+        if (own) {
+            ownRequest = true;
+            changed.run();
+        } else {
             inherited = false;
-            sessionStart = 0;
-            sessionActive = false;
+            endSession();
         }
+    }
+
+    /** This process's request is over, or was never made. */
+    private void endSession() {
+        ownRequest = false;
+        sessionStart = 0;
+        sessionActive = false;
         changed.run();
     }
 }

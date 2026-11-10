@@ -113,18 +113,33 @@ final class OwnershipTest {
             Book b = new Book(false);
             int gen = b.requested(1_000);
             b.own.requestActivated(gen);
-            b.own.requestEnded(gen);
+            b.own.requestEnded(gen, 2_000);
             no("ours", b.own.hasOwnRequest());
             no("session", b.own.hasSession());
             no("live", b.own.isSessionLive(1_100));
         });
 
-        t.test("the end of a request also ends what was inherited", () -> {
+        t.test("the end of our active request also ends what was inherited", () -> {
             Book b = new Book(true);
             int gen = b.requested(1_000);
-            b.own.requestEnded(gen);
+            b.own.requestActivated(gen);  // it took the place of the inherited one
+            b.own.requestEnded(gen, 2_000);
             no("ours", b.own.hasOwnRequest());
             no("inherited", b.own.isInherited());
+        });
+
+        t.test("the end of a request that never became active leaves what was taken over", () -> {
+            Book b = new Book(false);
+            int gen = b.requested(1_000);
+            b.own.onRearDisplay(ON, 1_100);  // another app's request got in first
+            b.own.adopt();                   // the phone was opened
+            int before = b.changes;
+            b.own.requestEnded(gen, 1_300);  // Cancel was tapped in our dialog
+            no("session", b.own.hasSession());
+            yes("inherited", b.own.isInherited());
+            yes("ours", b.own.hasOwnRequest());
+            same("changes reported", before + 1, b.changes);
+            no("rear display about to go off", b.own.isEnding(1_300));
         });
 
         t.test("a replaced request's callbacks can't touch the new one", () -> {
@@ -132,7 +147,7 @@ final class OwnershipTest {
             int first = b.requested(1_000);
             int second = b.requested(12_000);  // the first was lost and redone
             yes("a new generation", second != first);
-            b.own.requestEnded(first);
+            b.own.requestEnded(first, 12_050);
             yes("ours after the old one's end", b.own.hasOwnRequest());
             yes("waiting after the old one's end", b.own.isSessionWaiting(12_100));
             b.own.requestActivated(first);
@@ -160,9 +175,9 @@ final class OwnershipTest {
             b.own.sessionStarted(1_000);
             b.own.requestActivated(gen);
             same("accepted and activated change nothing that is saved", 2, b.changes);
-            b.own.requestEnded(gen);
+            b.own.requestEnded(gen, 2_000);
             same("after the end", 3, b.changes);
-            b.own.requestEnded(gen - 1);
+            b.own.requestEnded(gen - 1, 2_000);
             same("after a stale end", 3, b.changes);
         });
     }
@@ -179,37 +194,94 @@ final class OwnershipTest {
 
         t.test("an active request that isn't ours can be taken over", () -> {
             Book b = new Book(false);
-            yes("can adopt", b.own.canAdopt(ON));
+            yes("can adopt", b.own.canAdopt(ON, 1_000));
             b.own.adopt();
             yes("ours", b.own.hasOwnRequest());
             yes("inherited", b.own.isInherited());
             same("changes reported", 1, b.changes);
-            no("can adopt again", b.own.canAdopt(ON));
+            no("can adopt again", b.own.canAdopt(ON, 1_000));
         });
 
         t.test("nothing to take over while rear display is off, or while a request is ours", () -> {
-            no("rear display off", new Book(false).own.canAdopt(OFF));
-            no("inherited", new Book(true).own.canAdopt(ON));
+            no("rear display off", new Book(false).own.canAdopt(OFF, 1_000));
+            no("inherited", new Book(true).own.canAdopt(ON, 1_000));
             Book b = new Book(false);
             b.own.markRequestPending();
-            no("marked as pending", b.own.canAdopt(ON));
+            no("marked as pending", b.own.canAdopt(ON, 1_000));
             b.requested(1_000);
-            no("our request waiting", b.own.canAdopt(ON));
+            no("our request waiting", b.own.canAdopt(ON, 1_000));
         });
 
         t.test("rear display off: the request we had to end is gone", () -> {
             Book b = new Book(true);
             no("gone while on", b.own.isInheritedGone(ON));
             yes("gone once off", b.own.isInheritedGone(OFF));
-            b.own.clear();
+            b.own.inheritedGone();
             no("ours", b.own.hasOwnRequest());
             no("gone twice", b.own.isInheritedGone(OFF));
+            same("changes reported", 1, b.changes);
         });
 
-        t.test("not gone while a request of this process is under way", () -> {
+        t.test("gone also while a request of this process is under way, which stays ours", () -> {
             Book b = new Book(true);
+            b.requested(1_000);
+            yes("gone", b.own.isInheritedGone(OFF));
+            b.own.inheritedGone();
+            no("inherited", b.own.isInherited());
+            yes("ours", b.own.hasOwnRequest());
+            yes("waiting", b.own.isSessionWaiting(1_100));
+        });
+
+        t.test("on open: what is active is taken over unless it is known to be ours to end", () -> {
+            no("rear display off", new Book(false).own.canAdoptOnOpen(OFF));
+            yes("nothing of ours", new Book(false).own.canAdoptOnOpen(ON));
+            no("inherited", new Book(true).own.canAdoptOnOpen(ON));
+            Book b = new Book(false);
             b.own.markRequestPending();
-            no("gone", b.own.isInheritedGone(OFF));
+            yes("our request only marked", b.own.canAdoptOnOpen(ON));
+            int gen = b.requested(1_000);
+            yes("our request waiting for its dialog: another app's is the active one", b.own.canAdoptOnOpen(ON));
+            b.own.requestActivated(gen);
+            no("our request active", b.own.canAdoptOnOpen(ON));
+            b.own.requestEnded(gen, 2_000);
+            yes("our request ended, rear display still on", b.own.canAdoptOnOpen(ON));
+            b.own.adopt();
+            no("taken over", b.own.canAdoptOnOpen(ON));
+        });
+
+        t.test("no take-over on the closed phone for 2 s after our active request ended, or until rear display is reported", () -> {
+            Book b = new Book(false);
+            int gen = b.requested(1_000);
+            b.own.onRearDisplay(ON, 1_200);
+            b.own.requestActivated(gen);
+            b.own.requestEnded(gen, 5_000);  // its callback comes before rear display is reported off
+            yes("about to go off", b.own.isEnding(5_000));
+            no("can adopt at once", b.own.canAdopt(ON, 5_000));
+            no("can adopt after 1999 ms", b.own.canAdopt(ON, 6_999));
+            yes("can adopt after 2 s: it stayed on, so another request took its place", b.own.canAdopt(ON, 7_000));
+            b.own.onRearDisplay(ON, 5_010);  // or sooner, once rear display is reported again
+            no("about to go off", b.own.isEnding(5_010));
+            yes("can adopt", b.own.canAdopt(ON, 5_010));
+        });
+
+        t.test("the end of a request that was never active holds nothing up", () -> {
+            Book b = new Book(false);
+            int gen = b.requested(1_000);
+            b.own.requestEnded(gen, 1_200);  // Cancel was tapped in its dialog
+            no("about to go off", b.own.isEnding(1_200));
+            yes("can adopt", b.own.canAdopt(ON, 1_200));
+        });
+
+        t.test("no take-over on the closed phone while a cancel made here is pending", () -> {
+            Book b = new Book(false);
+            b.own.onRearDisplay(ON, 1_000);
+            b.own.cancelled(5_000, !BY_USER);  // adb's forced cancel, the curtain's
+            no("can adopt at once", b.own.canAdopt(ON, 5_000));
+            yes("can adopt after 2 s", b.own.canAdopt(ON, 7_000));
+            b.own.cancelled(8_000, !BY_USER);
+            b.own.onRearDisplay(OFF, 8_050);
+            b.own.onRearDisplay(ON, 8_600);    // another app's request
+            yes("can adopt what comes after it went off", b.own.canAdopt(ON, 8_600));
         });
 
         t.test("nothing inherited: nothing to be gone", () ->
@@ -319,15 +391,16 @@ final class OwnershipTest {
             no("pending", b.own.isCancelPending(21_000));
         });
 
-        t.test("the user's cancel right after one of ours: the switch-off counts as ours", () -> {
+        t.test("the user's cancel right after one of ours: the switch-off isn't counted as ours", () -> {
             Book b = new Book(false);
             b.own.onRearDisplay(ON, 1_000);
             b.own.cancelled(5_000, !BY_USER);
+            // The status screen can't get here: it hides its button while a cancel of ours is
+            // pending and checks again at the tap. The bookkeeping doesn't rely on that.
             b.own.cancelled(5_500, BY_USER);
+            no("pending", b.own.isCancelPending(5_500));
             b.own.onRearDisplay(OFF, 5_600);
-            // current behaviour, pinned as found: the status screen hides its button while a cancel of
-            // ours is pending, so the two can only meet through a button that is a moment out of date.
-            same("ending cancel", 5_000L, b.own.endingCancelAt());
+            same("ending cancel", 0L, b.own.endingCancelAt());
         });
 
         t.test("the cancelled request's own end can't clear a request made since", () -> {
@@ -336,10 +409,10 @@ final class OwnershipTest {
             b.own.requestActivated(first);
             b.own.cancelled(5_000, !BY_USER);
             int second = b.requested(5_200);  // closed again at once
-            b.own.requestEnded(first);        // the system reports the cancelled one late
+            b.own.requestEnded(first, 5_250);  // the system reports the cancelled one late
             yes("ours", b.own.hasOwnRequest());
             yes("waiting", b.own.isSessionWaiting(5_300));
-            b.own.requestEnded(second);
+            b.own.requestEnded(second, 6_000);
             no("ours once the new one ends", b.own.hasOwnRequest());
         });
     }

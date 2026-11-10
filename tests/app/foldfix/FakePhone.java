@@ -14,6 +14,8 @@ final class FakePhone implements Reconciler.Rear, Reconciler.Phone {
     String backend = "window extensions";
     boolean known = true, available = true, outer = true;
     boolean rear, ours, live, waiting, cancelPending, dialog;
+    /** Taking a request over has to wait: one of ours has just ended (see RearDisplay.adopt). */
+    boolean ending;
     long endingCancelAt;
     int activations;
     /** Far from 0, as on a phone that has been on for a while, and apart from each other. */
@@ -73,7 +75,13 @@ final class FakePhone implements Reconciler.Rear, Reconciler.Phone {
     @Override public boolean isCancelPending() { return cancelPending; }
     @Override public long endingCancelAt() { return endingCancelAt; }
     @Override public int activations() { return activations; }
-    @Override public void adopt() { did.add("adopt"); }
+    @Override
+    public boolean adopt() {
+        if (!ending) did.add("adopt");
+        return !ending;
+    }
+
+    @Override public void adoptOnOpen() { did.add("adopt on open"); }
 
     // ---- Reconciler.Phone ---------------------------------------------------------------
 
