@@ -3,7 +3,6 @@ package app.foldfix;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
-import android.util.Log;
 
 /**
  * Test hook: makes the running service act on a simulated hall reading instead of the sensor's,
@@ -29,7 +28,7 @@ public class HallOverride extends BroadcastReceiver {
             result = FoldService.simulateHall(null);
         } else {
             result = "ignored: expected --es " + EXTRA_HALL + " " + OPEN + "|" + CLOSED + "|" + REAL;
-            Log.w(FoldService.TAG, "hall simulation " + result);
+            FoldLog.w("hall simulation " + result);
         }
         if (isOrderedBroadcast()) setResultData(result);  // "am broadcast" prints it
     }

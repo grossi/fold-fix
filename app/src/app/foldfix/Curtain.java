@@ -6,7 +6,6 @@ import android.content.Intent;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
-import android.util.Log;
 
 /**
  * Plain black screen for one case: the phone was opened, FoldFix ended its request, and the app
@@ -25,7 +24,6 @@ import android.util.Log;
  * after its own ended. Other apps can't start it.
  */
 public class Curtain extends Activity {
-    static final String TAG = FoldService.TAG;
     static final String EXTRA_DEADLINE = "deadline", EXTRA_ACTIVATION = "activation";
 
     /** How long the app below is kept in the background once rear-display mode is off. */
@@ -68,7 +66,7 @@ public class Curtain extends Activity {
         rd = RearDisplay.get(this);
         String stale = whyStale();
         if (stale != null) {
-            Log.i(TAG, "curtain: leaving the request alone, " + stale);
+            FoldLog.i("curtain: leaving the request alone, " + stale);
             finish();
             return;
         }
@@ -76,7 +74,7 @@ public class Curtain extends Activity {
             finish();
             return;
         }
-        Log.i(TAG, "curtain: up, covering the other app for " + HOLD_MS + " ms once rear display is off");
+        FoldLog.i("curtain: up, covering the other app for " + HOLD_MS + " ms once rear display is off");
         h.postDelayed(done, MAX_MS);
         rd.addListener(check);
         check();

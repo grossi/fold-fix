@@ -28,6 +28,8 @@ The code is in `app/src/app/foldfix/`:
 | `Trampoline.java` | Invisible activity that makes the request or cancel as the top app |
 | `Curtain.java` | Black screen that ends Pixel Camera's repeat request on open and covers Camera for a moment |
 | `Hardware.java` | Finds the hall sensor; checks whether the outer display exists |
+| `FoldLog.java` | The one way FoldFix logs: to Android's log, and into a short history kept in memory |
+| `App.java` | Marks the start of the process in that history; knows which build is installed |
 | `HallOverride.java` | Test hook: lets adb simulate folding and unfolding |
 | `MainActivity.java` | The status and setup screen |
 
@@ -108,7 +110,7 @@ All of it is drawn in software: the manifest sets `android:hardwareAccelerated="
 
 Two things in Android ignore that setting and bring a hardware renderer of their own into the app's process, so the status screen keeps clear of both:
 
-- The magnifier that shows while text is being selected. The status screen has no selectable text; a long press on the Version line or on the adb command copies it instead.
+- The magnifier that shows while text is being selected. The status screen has no selectable text; a long press on the Version line, on the adb command or on the recent activity copies it instead.
 - Long screenshots ("Capture more"), which Android renders from the app's scrolling view. The status screen's scrolling view is excluded from them, so only a normal screenshot is offered.
 
 The reason is what a GPU fault does to an app. Android's hardware renderer runs inside the app's process. When the GPU driver reports its device as lost, the renderer aborts the process, and while the GPU doesn't answer, the main thread waits for the render thread. On a Pixel Fold on Android 17 that happened three times during tests, each time with the status screen showing over the lock screen (which only test builds do). Two of the three read as follows; the third named another fault, `CS_INHERIT_FAULT`:
@@ -427,6 +429,43 @@ FoldFix logs what it does under the tag `FoldFix`:
 ```sh
 adb logcat -s FoldFix
 ```
+
+### The history
+
+On an affected phone that log is of little use afterwards. The dead hinge sensor makes the system write thousands of `FoldableDeviceStateProvider` lines per second, and FoldFix's lines are pushed out within a couple of minutes. So FoldFix also keeps its own lines itself. Every log call goes through one class, `FoldLog`, which writes the line to Android's log as before (same tag, same text) and adds it to a history:
+
+- **The last 500 lines**, each with the wall-clock time to the millisecond and its level (`I`, `W` or `E`). Opening and closing the phone once writes 15 lines, or 23 with [Pixel Camera on screen](#pixel-camera-on-screen-when-the-phone-is-opened) (two more each when [simulated](#driving-it-from-adb)), so that is the last 33 such cycles, or 21 of the long ones. Older lines drop out one by one. Kept in memory, 500 lines take about 50 KB.
+- **In memory only.** No file and no setting: the history starts again when FoldFix's process does (an update, a restart of the phone, Android restarting the app). Each process writes `FoldFix 1.0.3 (4) started` as its first line, so it is plain where the history begins.
+- **Only what FoldFix logs:** device states, timings, the view IDs of the dialog's buttons, and the names and messages of exceptions (Android's log gets their stack traces, the history doesn't). Nothing read from the screen is ever logged, and nothing about other apps: FoldFix only knows that rear-display mode went on or off, not through which app. A line longer than 300 characters is cut.
+- **Cheap.** Adding a line takes a lock and stores a time and the text that was logged anyway; times are only formatted when the history is read. It can be called from any thread.
+
+The status screen shows the newest 100 lines under **Recent activity**, and its **Copy** button (or a long press on the lines) copies the **Version** line followed by all 500. Two limits keep that cheap, because the status screen runs on the main thread of the one process, which the service needs too (see [Drawn in software](#drawn-in-software)):
+
+- **100 lines, not 500.** What costs is laying out the text again when it changes. On an idle Pixel Fold on Android 17, where everything runs at its slowest, a refresh that renewed the lines took about 36 ms with 100 lines shown (21 to 52 ms in ten runs) and about 88 ms with all 500 (60 to 118 ms); a refresh without a change took about 7 ms. Drawing the next frame in software added 16 to 46 ms while the lines filled the screen. Scrolling was the same with either, about 5 ms per frame.
+- **At most once a second,** and only when the history has changed. The screen refreshes more often than that during a screen switch, on every change of the device state; the lines wait for the next refresh that is a second later. The exception is a status screen that Android creates anew because it moved to the other display: it lays out everything once anyway, the lines included.
+
+From a computer, the same comes from the service, without the status screen:
+
+```sh
+adb shell dumpsys activity service app.foldfix/.FoldService
+```
+
+```text
+SERVICE app.foldfix/.FoldService 72adec4 pid=2749 user=0
+  Client:
+    FoldFix 1.0.3 (4), self-built (signed with another key)
+    Status: Closed: outer screen on
+    Recent activity (in memory only, since FoldFix last started; newest last):
+    11-11 02:42:29.568 I FoldFix 1.0.3 (4) started
+    11-11 02:42:29.603 I window extensions ready, rear state 5 -> 3
+    ...
+    11-11 02:42:53.827 I rear display status 3, state 3 REAR_DISPLAY_STATE
+    11-11 02:42:53.834 I status: Closed: outer screen on
+```
+
+It works on a locked phone, needs the service to be on (otherwise: `No services match`), and like every `dumpsys` it is only open to holders of `DUMP`, in practice the adb shell. `dumpsys` indents the lines, and now and then leaves the indent off one of them. The lines are the ones `adb logcat -s FoldFix` shows; a time can be a millisecond later than there, because the history takes it right after the line was logged.
+
+### Driving it from adb
 
 The trampoline can be driven from adb for testing. The adb shell holds the `DUMP` permission that protects it; other apps don't.
 

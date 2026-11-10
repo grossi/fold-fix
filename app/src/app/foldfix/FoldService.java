@@ -8,10 +8,12 @@ import android.hardware.SensorManager;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
-import android.util.Log;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.accessibility.AccessibilityWindowInfo;
+
+import java.io.FileDescriptor;
+import java.io.PrintWriter;
 
 /**
  * The fix itself. On a Pixel Fold with a dead hinge-angle sensor Android is stuck in the OPENED
@@ -35,7 +37,6 @@ import android.view.accessibility.AccessibilityWindowInfo;
  * way up (rear-display mode turns it upside down).
  */
 public class FoldService extends AccessibilityService implements SensorEventListener {
-    static final String TAG = "FoldFix";
     static final String SYSTEMUI = "com.android.systemui";
     static final String DIALOG_TITLE_ID = SYSTEMUI + ":id/rear_display_title_text_view";
     /** Dialog buttons by ID, not label, so it works in every language. */
@@ -88,7 +89,7 @@ public class FoldService extends AccessibilityService implements SensorEventList
         instance = this;
         if (simulatedHall != null) {
             // Left over from an earlier connection that wasn't stopped: each one starts on the sensor.
-            Log.i(TAG, "hall simulation off: service connected again");
+            FoldLog.i("hall simulation off: service connected again");
             simulatedHall = null;
         }
         // Nothing is kept from an earlier connection of this instance. The sensor sends its
@@ -106,13 +107,13 @@ public class FoldService extends AccessibilityService implements SensorEventList
             setStatus("No hall sensor found: this phone is not supported");
         } else {
             boolean ok = sm.registerListener(this, hall, SensorManager.SENSOR_DELAY_NORMAL);
-            Log.i(TAG, "service connected, hall sensor \"" + hall.getName() + "\" registered=" + ok
+            FoldLog.i("service connected, hall sensor \"" + hall.getName() + "\" registered=" + ok
                     + ", backend " + rd.backend());
             setStatus("Waiting for the hall sensor and device state");
         }
         // Checked now, while no screen switch is in progress (the display list is briefly
         // incomplete during one).
-        Log.i(TAG, "outer screen present " + Hardware.outerDisplayPresent(this)
+        FoldLog.i("outer screen present " + Hardware.outerDisplayPresent(this)
                 + " (built-in displays: " + Hardware.builtInDisplayCount(this) + "), hidden API "
                 + (rd.hasHiddenApi() ? "allowed" : "blocked"));
     }
@@ -125,14 +126,14 @@ public class FoldService extends AccessibilityService implements SensorEventList
         if (simulatedHall == null) {
             onHall(c);
         } else if (changed) {
-            Log.i(TAG, "hall sensor says " + name(c) + ", ignored: simulating " + name(simulatedHall));
+            FoldLog.i("hall sensor says " + name(c) + ", ignored: simulating " + name(simulatedHall));
         }
     }
 
     /** A hall reading to act on, from the sensor or simulated. */
     void onHall(boolean c) {
         if (closed != null && closed == c) return;
-        Log.i(TAG, "hall " + name(c) + (simulatedHall != null ? " (simulated)" : ""));
+        FoldLog.i("hall " + name(c) + (simulatedHall != null ? " (simulated)" : ""));
         closed = hallClosed = c;
         lastLaunch = 0;
         tries = 0;
@@ -153,13 +154,13 @@ public class FoldService extends AccessibilityService implements SensorEventList
         String refused = s == null ? "the service isn't running"
                 : s.sensorClosed == null ? "no reading from the hall sensor yet" : null;
         if (refused != null) {
-            Log.w(TAG, "hall simulation ignored: " + refused);
+            FoldLog.w("hall simulation ignored: " + refused);
             return "ignored: " + refused;
         }
         simulatedHall = value;
         String result = (value != null ? "simulating hall " + name(value) : "hall simulation off")
                 + ", sensor says " + name(s.sensorClosed);
-        Log.i(TAG, result);
+        FoldLog.i(result);
         s.onHall(value != null ? value : s.sensorClosed);
         return result;
     }
@@ -270,11 +271,11 @@ public class FoldService extends AccessibilityService implements SensorEventList
         long after = SystemClock.elapsedRealtime() - cancelled;
         String what = "another app turned rear display on " + after + " ms after our cancel: ";
         if (followedUp || after >= REREQUEST_MS) {
-            Log.i(TAG, what + "left alone");
+            FoldLog.i(what + "left alone");
             return;
         }
         followedUp = true;
-        Log.i(TAG, what + "ending that once");
+        FoldLog.i(what + "ending that once");
         Curtain.start(this, cancelled + REREQUEST_MS, otherSeen);
     }
 
@@ -303,7 +304,7 @@ public class FoldService extends AccessibilityService implements SensorEventList
         } else if (cancelSentAt == 0) {
             cancelSentAt = SystemClock.elapsedRealtime();
         }
-        Log.i(TAG, action + " rear display (try " + tries + ", " + rd.describeState() + ")");
+        FoldLog.i(action + " rear display (try " + tries + ", " + rd.describeState() + ")");
         Trampoline.start(this, action);
     }
 
@@ -327,15 +328,15 @@ public class FoldService extends AccessibilityService implements SensorEventList
             while (t != null && !t.isClickable()) t = t.getParent();
             if (t != null) {
                 boolean ok = t.performAction(AccessibilityNodeInfo.ACTION_CLICK);
-                Log.i(TAG, "clicked " + buttonId + ": " + ok);
+                FoldLog.i("clicked " + buttonId + ": " + ok);
                 return;
             }
         }
-        Log.w(TAG, "dialog up but no " + buttonId + " yet");
+        FoldLog.w("dialog up but no " + buttonId + " yet");
     }
 
     void setStatus(String s) {
-        if (!s.equals(status)) Log.i(TAG, "status: " + s);
+        if (!s.equals(status)) FoldLog.i("status: " + s);
         status = s;
     }
 
@@ -360,7 +361,7 @@ public class FoldService extends AccessibilityService implements SensorEventList
 
     void stop() {
         if (!running) return;
-        Log.i(TAG, "service stopped");
+        FoldLog.i("service stopped");
         running = false;
         h.removeCallbacks(reconcile);
         if (sm != null) sm.unregisterListener(this);
@@ -371,9 +372,24 @@ public class FoldService extends AccessibilityService implements SensorEventList
             instance = null;
             status = null;
             hallClosed = null;
-            if (simulatedHall != null) Log.i(TAG, "hall simulation off: service stopped");
+            if (simulatedHall != null) FoldLog.i("hall simulation off: service stopped");
             simulatedHall = null;
         }
+    }
+
+    /**
+     * The history without the status screen, for a phone whose screen can't be looked at:
+     * {@code adb shell dumpsys activity service app.foldfix/.FoldService}. Prints which build this
+     * is, what the service is doing, and the history. Only while the service is on, and only for
+     * holders of {@code DUMP}, in practice the adb shell.
+     */
+    @Override
+    protected void dump(FileDescriptor fd, PrintWriter out, String[] args) {
+        String s = status;
+        out.println("FoldFix " + App.describeBuild(this));
+        out.println("Status: " + (s != null ? s : "service not connected"));
+        out.println("Recent activity (in memory only, since FoldFix last started; newest last):");
+        out.print(FoldLog.text(FoldLog.CAPACITY));
     }
 
     @Override

@@ -236,10 +236,10 @@ adb shell cmd device_state print-states               > device_states.txt
 adb shell cmd device_state state                     >> device_states.txt
 adb shell dumpsys display                             > display.txt
 adb shell "cat /proc/cmdline | tr ' ' '\n' | grep panel" > panels.txt
-adb logcat -d -s FoldFix                              > foldfix.txt
+adb shell dumpsys activity service app.foldfix/.FoldService > foldfix.txt
 adb logcat -d                                         > logcat.txt
 ```
 
-`foldfix.txt` holds only FoldFix's own log (tag `FoldFix`): what it detected and what it did. Fold and unfold the phone a few times just before running it. It's usually the most useful file for a FoldFix bug report.
+`foldfix.txt` holds only FoldFix's own history: which build is installed, what it is doing, and the last 500 lines of what it detected and what it did, with their times. It's the same history that the **Copy** button under **Recent activity** on FoldFix's status screen copies, so no computer is needed for it. FoldFix keeps it in memory, so it goes back further than Android's log, which on an affected phone only holds FoldFix's lines for a couple of minutes; it starts again when FoldFix restarts. The command needs FoldFix's accessibility service to be on (otherwise it prints `No services match`). It's usually the most useful file for a FoldFix bug report.
 
 Full logs and dumps can contain personal information, such as account names, Wi-Fi network names, device identifiers, app names and notification text. Before attaching them to a public issue, trim them to the relevant lines or check them carefully.

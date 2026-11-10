@@ -52,6 +52,7 @@ Install the app (step 1 below) and open **FoldFix**. Its status screen has these
 | **Rear-display access** | `OK, no setup needed` | `Needs a one-time adb command`: see [Troubleshooting](#status-screen-asks-for-an-adb-command) |
 | **Device state** | `2 OPENED (rear display off)` even while the phone is folded | |
 | **Version** | The installed version and who signed it, such as `1.0.2 (3), official release` | `self-built (signed with another key)` for any build that isn't one of this project's releases, such as your own |
+| **Recent activity** | What FoldFix did, one line per step with its time, newest last, such as `11-11 02:38:44.184 I hall open`. The **Copy** button copies the **Version** line and all of it, for a [bug report](#contributing) | `(400 earlier lines not shown)` at the top: the screen shows the last 100 lines, **Copy** takes all of them (up to 500) |
 
 Everything except the **Accessibility service** section works right after installing.
 
@@ -143,7 +144,7 @@ Fold and unfold once. Then open FoldFix and check:
 If it says `Open: another app is using the outer screen`, an app such as Pixel Camera switched screens while the phone was open. FoldFix leaves that alone, so switch back in that app. If the outer screen stays on after you've left the app, tap **Switch to the inner screen**, right below that line. The button is shown while the outer screen is on although the phone is open, and ends the outer-screen request, whichever app made it. FoldFix does nothing more after that: an app that asks for the outer screen again gets it. Closing and opening the phone once also works: FoldFix ends any outer-screen request it finds still active on a closed phone when you open it.
 
 **Pixel Camera stays on the outer screen after opening the phone.**
-Camera, when it was opened on the closed phone, asks for the outer screen again as soon as the phone is opened. FoldFix undoes that once per opening, and Camera should appear on the inner screen after about 3 seconds. Now and then Camera asks once more after that, which FoldFix leaves alone. If it stays on the outer screen, and the inner screen keeps showing "Front screen turned on", close the phone and open it again, or leave Camera and then use the "Slide to use inner screen" control. Sliding while Camera is still on screen doesn't help: Camera asks for the outer screen again. Then please [open an issue](../../issues) with FoldFix's log (see [Contributing](#contributing)); the lines containing `another app turned rear display on` say what happened.
+Camera, when it was opened on the closed phone, asks for the outer screen again as soon as the phone is opened. FoldFix undoes that once per opening, and Camera should appear on the inner screen after about 3 seconds. Now and then Camera asks once more after that, which FoldFix leaves alone. If it stays on the outer screen, and the inner screen keeps showing "Front screen turned on", close the phone and open it again, or leave Camera and then use the "Slide to use inner screen" control. Sliding while Camera is still on screen doesn't help: Camera asks for the outer screen again. Then please [open an issue](../../issues) with FoldFix's recent activity (see [Contributing](#contributing)); the lines containing `another app turned rear display on` say what happened.
 
 **There's no front (selfie) camera.**
 On the test phone, a Pixel Fold on Android 17, Android lists no front camera at all, open or closed, so apps only get the rear cameras. Pixel Camera shows no button to switch cameras on the closed phone. On the open phone the button is there, and tapping it brings up Camera's own "Something went wrong" message about the camera's hardware or software. It doesn't come from the screen FoldFix switches to: the list is the same after FoldFix has given the outer screen back, and nothing FoldFix does while running brings a camera back. ("Open" here was a simulated unfolding, with the phone itself shut.) To check your phone from a computer:
@@ -239,6 +240,7 @@ FoldFix:
 - reads the hall-effect and hinge-angle sensors, and the orientation sensor that auto-rotate uses.
 - requests **no Android permissions**, not even internet access. It collects no data and has no analytics or ads.
 - stores one setting on the phone: whether a rear-display request that it has to end (its own, or one another app left behind) may still be active.
+- keeps a short history of what it did, shown under **Recent activity** on its status screen, in memory only. It holds FoldFix's own activity lines and nothing else: the last 500 steps such as `hall closed` or `rear display requested (window extensions)`, with their times, device states and error names. So it shows when the phone was opened and closed. Nothing read from the screen is in it, and no other app is named: FoldFix can tell that the outer screen was asked for, not by which app. It is never written to storage, it starts again whenever FoldFix restarts, and it never leaves the phone unless you copy it yourself (the **Copy** button, or `dumpsys` over adb).
 - is open source. You can read the code and [build it yourself](#build-from-source).
 
 ## How it works
@@ -323,11 +325,13 @@ Reports from other devices and Android versions are the most useful contribution
 
 - device model and Android build (`adb shell getprop ro.build.fingerprint`),
 - what happened when folding and unfolding,
-- what FoldFix's status screen shows, and its **Version** line copied as it is (a long press copies it), for example `1.0.2 (3), official release`: it says exactly which build is installed,
-- the output of the checks in [docs/diagnosis.md](docs/diagnosis.md),
-- FoldFix's log while you fold and unfold a few times: `adb logcat -s FoldFix`.
+- what FoldFix's status screen shows,
+- what FoldFix did: on the status screen, scroll down to **Recent activity** and tap **Copy**, then paste. Do it soon after the problem showed, or after folding and unfolding a few times. It copies the **Version** line, which says exactly which build is installed (for example `1.0.2 (3), official release`), and FoldFix's own history of the last 500 steps with their times. No computer is needed,
+- the output of the checks in [docs/diagnosis.md](docs/diagnosis.md), if you have a computer.
 
-Logs can contain personal information. Trim them to the relevant lines before posting.
+The history is kept in memory only and starts again when FoldFix restarts (after an update, or a restart of the phone), so copy it before restarting. From a computer, `adb shell dumpsys activity service app.foldfix/.FoldService` prints the same history while the service is on, with a line saying what FoldFix is doing. `adb logcat -s FoldFix` has the same lines too, but on an affected phone Android's log only keeps them for a couple of minutes.
+
+The copied history holds only FoldFix's own lines: device states, timings and error names, which includes the times at which the phone was opened and closed. Other logs and dumps, such as a full `adb logcat`, can contain personal information. Trim them to the relevant lines before posting.
 
 Bug fixes and pull requests are welcome. FoldFix should stay small: no network access, no data collection, and no new permissions without discussion first.
 

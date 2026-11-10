@@ -3,7 +3,6 @@ package app.foldfix;
 import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
-import android.util.Log;
 
 /**
  * Invisible activity that starts or ends rear-display mode, then finishes. It exists because the
@@ -52,12 +51,12 @@ public class Trampoline extends Activity {
             if (stale == null) {
                 rd.cancel();
             } else {
-                Log.i(RearDisplay.TAG, "dropping stale cancel: " + stale + " (" + rd.describeState() + ")");
+                FoldLog.i("dropping stale cancel: " + stale + " (" + rd.describeState() + ")");
             }
         } else if (Boolean.FALSE.equals(FoldService.hallClosed)) {
             // Started while closed but only resumed now (e.g. the screen was off) and the phone
             // has been opened since: a request would just be cancelled again.
-            Log.i(RearDisplay.TAG, "phone is open, dropping stale request");
+            FoldLog.i("phone is open, dropping stale request");
             rd.dropPendingMark();
         } else {
             rd.request(this);

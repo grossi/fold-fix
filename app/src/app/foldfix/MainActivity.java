@@ -7,10 +7,6 @@ import android.app.Activity;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Intent;
-import android.content.pm.PackageInfo;
-import android.content.pm.PackageManager;
-import android.content.pm.Signature;
-import android.content.pm.SigningInfo;
 import android.graphics.Insets;
 import android.graphics.Typeface;
 import android.graphics.drawable.RippleDrawable;
@@ -34,8 +30,8 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import java.security.MessageDigest;
 import java.util.Locale;
+import java.util.function.Supplier;
 
 /** Status and setup checklist. Everything refreshes on resume; sensors update live. */
 public class MainActivity extends Activity implements SensorEventListener {
@@ -44,23 +40,32 @@ public class MainActivity extends Activity implements SensorEventListener {
     /** After a tap that sent a cancel, the switch button is hidden for this long: one cancel, then wait. */
     static final long SWITCH_AGAIN_MS = 2_000;
     /**
-     * SHA-256 of the certificate the releases are signed with. Not a secret: the release job's
-     * log prints it, and release notes quote it.
+     * How many of the history's lines are shown; the Copy button takes them all. On an idle Pixel
+     * Fold a refresh that renewed the lines took about 36 ms with 100 of them and 88 ms with all
+     * 500, nearly all of it for laying out the text, on the main thread, which the service shares.
      */
-    static final String RELEASE_CERT_SHA256 = "41f87594fad12af529af92f99bd25c8309020fc5d681acdf9d2fc6c53bdb57e3";
+    static final int ACTIVITY_LINES = 100;
+    /**
+     * The shown lines are renewed at most this often. Not with every refresh: several of those
+     * come with each screen switch, when the service needs the main thread. (A screen created
+     * anew by that switch shows them at once, with the rest of its first layout.)
+     */
+    static final long ACTIVITY_EVERY_MS = 1_000;
 
     final Handler h = new Handler(Looper.getMainLooper());
     final Runnable refresh = this::refresh;
     final Runnable hingeTimeout = this::hingeTimedOut;
 
     LinearLayout list;
-    TextView serviceText, hallText, hingeText, outerText, accessText, stateText;
+    TextView serviceText, hallText, hingeText, outerText, accessText, stateText, activityText;
     View accessCommand, switchBox;
     SensorManager sm;
     Sensor hall, hinge;
     RearDisplay rd;
     boolean hingeSeen, resumed, serviceEnabled = true;
     Boolean hallClosed;
+    /** {@link FoldLog#total} when the history was last put on screen, and the uptime; -1 before the first time. */
+    long activityShown = -1, activityShownAt;
     /**
      * Uptime of the last tap on the switch button that sent a cancel. Static, because the switch
      * it causes recreates this screen.
@@ -130,8 +135,18 @@ public class MainActivity extends Activity implements SensorEventListener {
         stateText = section("Device state");
         // The line to copy into a bug report.
         TextView version = section("Version");
-        version.setText(describeBuild());
+        version.setText(App.describeBuild(this));
         copyOnLongPress(version, "FoldFix version");
+        // Last, because it is long. The lines are FoldFix's own log (see FoldLog).
+        section("Recent activity").setText("What FoldFix did, newest last. Kept in memory only and "
+                + "not sent anywhere; it starts again when FoldFix restarts. Copy takes the Version "
+                + "line and all of it, for a bug report.");
+        Supplier<CharSequence> report = () -> "FoldFix " + version.getText() + "\n" + FoldLog.text(FoldLog.CAPACITY);
+        list.addView(button("Copy", () -> copy("FoldFix activity", report.get())));
+        activityText = text("", 11, false);
+        activityText.setTypeface(Typeface.MONOSPACE);
+        copyOnLongPress(activityText, "FoldFix activity", report);
+        list.addView(activityText);
     }
 
     @Override
@@ -199,7 +214,22 @@ public class MainActivity extends Activity implements SensorEventListener {
         accessCommand.setVisibility(backend != null ? View.GONE : View.VISIBLE);
 
         stateText.setText(rd.describeState());
+        showActivity();
         h.postDelayed(refresh, 1_000);  // the service status changes without callbacks
+    }
+
+    /**
+     * Puts the history on screen again, if it has changed since the last time. A change that comes
+     * too soon after that is shown by the next refresh, a second later at most.
+     */
+    void showActivity() {
+        long total = FoldLog.total(), now = SystemClock.uptimeMillis();
+        if (total == activityShown || (activityShown >= 0 && now - activityShownAt < ACTIVITY_EVERY_MS)) return;
+        activityShown = total;
+        activityShownAt = now;
+        long earlier = Math.min(total, FoldLog.CAPACITY) - ACTIVITY_LINES;
+        activityText.setText((earlier > 0 ? "(" + earlier + " earlier lines not shown)\n" : "")
+                + FoldLog.text(ACTIVITY_LINES).trim());
     }
 
     void hingeTimedOut() {
@@ -264,37 +294,6 @@ public class MainActivity extends Activity implements SensorEventListener {
         refresh();
     }
 
-    /**
-     * Version and who signed the installed app, for example "1.0.2 (3), official release". Read
-     * from the package manager, so it is what is installed, whatever its version is called.
-     */
-    String describeBuild() {
-        PackageManager pm = getPackageManager();
-        String version;
-        try {
-            PackageInfo p = pm.getPackageInfo(getPackageName(), PackageManager.PackageInfoFlags.of(0));
-            version = p.versionName + " (" + p.getLongVersionCode() + ")";
-        } catch (Exception e) {
-            return "Unknown";
-        }
-        // Looked up separately, so that a failure here still leaves the version.
-        try {
-            SigningInfo info = pm.getPackageInfo(getPackageName(), PackageManager.PackageInfoFlags.of(
-                    PackageManager.GET_SIGNING_CERTIFICATES)).signingInfo;
-            // The current signer only, not earlier keys it may have been rotated from.
-            Signature[] signers = info == null ? null : info.getApkContentsSigners();
-            if (signers == null || signers.length == 0) return version;
-            StringBuilder hex = new StringBuilder();
-            for (byte b : MessageDigest.getInstance("SHA-256").digest(signers[0].toByteArray())) {
-                hex.append(String.format(Locale.ROOT, "%02x", b));
-            }
-            return version + (signers.length == 1 && RELEASE_CERT_SHA256.contentEquals(hex)
-                    ? ", official release" : ", self-built (signed with another key)");
-        } catch (Exception e) {
-            return version;  // better no claim than a wrong one
-        }
-    }
-
     @Override
     public void onAccuracyChanged(Sensor s, int accuracy) {}
 
@@ -311,8 +310,13 @@ public class MainActivity extends Activity implements SensorEventListener {
      * software, and FoldFix keeps the GPU out of its process (see the manifest).
      */
     void copyOnLongPress(TextView t, String label) {
-        t.setOnLongClickListener(v -> {
-            copy(label, t.getText());
+        copyOnLongPress(t, label, t::getText);
+    }
+
+    /** The same, for a view that doesn't show all of what is to be copied. */
+    void copyOnLongPress(View view, String label, Supplier<CharSequence> text) {
+        view.setOnLongClickListener(v -> {
+            copy(label, text.get());
             return true;
         });
     }

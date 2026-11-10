@@ -17,7 +17,6 @@ import android.hardware.display.DisplayManager;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.PowerManager;
-import android.util.Log;
 import android.view.Display;
 import android.view.Surface;
 import android.view.View;
@@ -45,7 +44,6 @@ import android.view.WindowManager;
  * the phone is sideways stays in landscape until the phone is turned upright.
  */
 final class RotationFix implements SensorEventListener, DisplayManager.DisplayListener {
-    static final String TAG = FoldService.TAG;
     /** Sensor.TYPE_DEVICE_ORIENTATION (hidden): the rotation Android's auto-rotate follows. */
     static final int TYPE_DEVICE_ORIENTATION = 27;
 
@@ -87,7 +85,7 @@ final class RotationFix implements SensorEventListener, DisplayManager.DisplayLi
         sensor = sm.getDefaultSensor(TYPE_DEVICE_ORIENTATION);
         needed = reversesRearDisplay();
         params.setTitle("FoldFix landscape fix");
-        Log.i(TAG, "landscape fix " + (sensor == null ? "unavailable: no device orientation sensor"
+        FoldLog.i("landscape fix " + (sensor == null ? "unavailable: no device orientation sensor"
                 : needed ? "ready" : "not needed: Android doesn't reverse rear-display rotation"));
     }
 
@@ -113,7 +111,7 @@ final class RotationFix implements SensorEventListener, DisplayManager.DisplayLi
                 overlay = new View(service);
                 wm.addView(overlay, params);
             } catch (RuntimeException e) {
-                Log.w(TAG, "landscape fix: can't add the overlay", e);
+                FoldLog.w("landscape fix: can't add the overlay", e);
                 overlay = null;
                 active = false;
                 return;
@@ -131,7 +129,7 @@ final class RotationFix implements SensorEventListener, DisplayManager.DisplayLi
             try {
                 if (overlay != null) wm.removeView(overlay);
             } catch (RuntimeException e) {  // not attached any more
-                Log.w(TAG, "landscape fix: the overlay was gone already: " + e);
+                FoldLog.w("landscape fix: the overlay was gone already: " + e);
             }
             overlay = null;
             held = -1;
@@ -152,7 +150,7 @@ final class RotationFix implements SensorEventListener, DisplayManager.DisplayLi
             target = held;
         }
         if (target == forced) return;
-        Log.i(TAG, "landscape fix: " + (target < 0 ? "off" : "rotation " + target)
+        FoldLog.i("landscape fix: " + (target < 0 ? "off" : "rotation " + target)
                 + " (phone " + held + ", screen " + screen + ")");
         forced = target;
         // The outer screen is portrait by nature: LANDSCAPE is rotation 90, REVERSE_LANDSCAPE 270.
@@ -164,7 +162,7 @@ final class RotationFix implements SensorEventListener, DisplayManager.DisplayLi
         } catch (RuntimeException e) {
             // The overlay isn't attached any more. Thrown here it would take the service down, so
             // turn off instead: the next setActive(true) starts with a new overlay.
-            Log.w(TAG, "landscape fix: can't update the overlay, turning off", e);
+            FoldLog.w("landscape fix: can't update the overlay, turning off", e);
             setActive(false);
         }
     }

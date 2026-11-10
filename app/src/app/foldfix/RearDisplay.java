@@ -6,7 +6,6 @@ import android.content.SharedPreferences;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
-import android.util.Log;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
@@ -53,7 +52,6 @@ import java.util.regex.Pattern;
  * keeps per-process session state. Everything runs on the main thread; listeners are posted.
  */
 final class RearDisplay {
-    static final String TAG = "FoldFix";
     static final String ADB_COMMAND =
             "adb shell settings put global hidden_api_blacklist_exemptions Landroid/hardware/devicestate/";
 
@@ -218,7 +216,7 @@ final class RearDisplay {
      */
     void adopt() {
         if (hasOwnRequest() || !isRearActive()) return;
-        Log.i(TAG, "adopting the active rear display request (" + describeState() + ")");
+        FoldLog.i("adopting the active rear display request (" + describeState() + ")");
         inherited = true;
         save();
     }
@@ -250,7 +248,7 @@ final class RearDisplay {
     void request(Activity activity) {
         if (!Hardware.outerDisplayPresent(activity)) {
             // Checked here too, so no caller can crash the system.
-            Log.w(TAG, "outer screen not detected, not requesting rear display");
+            FoldLog.w("outer screen not detected, not requesting rear display");
             dropPendingMark();
             return;
         }
@@ -258,7 +256,7 @@ final class RearDisplay {
             // Nothing to do. A second request would put another dialog up (on the outer screen if
             // it is already on) or restart a request whose switch is still under way. Ownership
             // stays with whoever has it: us if our request is outstanding or inherited.
-            Log.i(TAG, "rear display already on or requested (ours: " + (sessionStart != 0 || inherited)
+            FoldLog.i("rear display already on or requested (ours: " + (sessionStart != 0 || inherited)
                     + "), not requesting again");
             dropPendingMark();
             return;
@@ -269,10 +267,10 @@ final class RearDisplay {
             try {
                 startExtensionSession(activity, gen);
                 sessionStarted();
-                Log.i(TAG, "rear display requested (window extensions)");
+                FoldLog.i("rear display requested (window extensions)");
                 return;
             } catch (Throwable t) {
-                Log.w(TAG, "window extensions request failed: " + unwrap(t));
+                FoldLog.w("window extensions request failed: " + unwrap(t));
                 if (unwrap(t) instanceof SecurityException) {  // not top app: same for both backends
                     setOwn(false);
                     return;
@@ -283,10 +281,10 @@ final class RearDisplay {
             try {
                 requestHidden(gen);
                 sessionStarted();
-                Log.i(TAG, "rear display requested (hidden API)");
+                FoldLog.i("rear display requested (hidden API)");
                 return;
             } catch (Throwable t) {
-                Log.w(TAG, "hidden API request failed: " + unwrap(t));
+                FoldLog.w("hidden API request failed: " + unwrap(t));
             }
         }
         setOwn(false);
@@ -316,7 +314,7 @@ final class RearDisplay {
             // Nothing active. A request still waiting for its dialog can't be cancelled through
             // the API (and the extension would lose track of it), only with the dialog's Cancel
             // button, so ownership is kept while one is outstanding.
-            Log.i(TAG, "nothing active to cancel" + (sessionStart != 0 ? ", request still waiting for its dialog" : ""));
+            FoldLog.i("nothing active to cancel" + (sessionStart != 0 ? ", request still waiting for its dialog" : ""));
             if (sessionStart == 0) setOwn(false);
             return true;
         }
@@ -329,11 +327,11 @@ final class RearDisplay {
             }
         } catch (Throwable t) {
             if (!(unwrap(t) instanceof IllegalStateException)) {  // ISE: no request to cancel
-                Log.w(TAG, "cancel failed: " + unwrap(t));
+                FoldLog.w("cancel failed: " + unwrap(t));
                 return false;
             }
         }
-        Log.i(TAG, "rear display request cancelled" + (byUser ? " from the status screen" : ""));
+        FoldLog.i("rear display request cancelled" + (byUser ? " from the status screen" : ""));
         if (!byUser) cancelledAt = at;
         generation++;
         setOwn(false);
@@ -348,7 +346,7 @@ final class RearDisplay {
             Object ext = provider.getMethod("getWindowExtensions").invoke(null);
             Object a = ext.getClass().getMethod("getWindowAreaComponent").invoke(ext);
             if (a == null) {
-                Log.i(TAG, "window extensions: no WindowAreaComponent");
+                FoldLog.i("window extensions: no WindowAreaComponent");
                 return;
             }
             extConsumer = Class.forName("androidx.window.extensions.core.util.function.Consumer",
@@ -364,16 +362,16 @@ final class RearDisplay {
                 try {
                     add.invoke(area, listener);
                 } catch (Throwable t) {
-                    Log.e(TAG, "could not watch rear display status, falling back", unwrap(t));
+                    FoldLog.e("could not watch rear display status, falling back", unwrap(t));
                     area = null;
                     watchHiddenState();
                     notifyListeners();
                 }
             });
         } catch (ClassNotFoundException | NoClassDefFoundError e) {
-            Log.i(TAG, "window extensions not available");
+            FoldLog.i("window extensions not available");
         } catch (Throwable t) {
-            Log.w(TAG, "window extensions unusable", unwrap(t));
+            FoldLog.w("window extensions unusable", unwrap(t));
             area = null;
         }
     }
@@ -402,14 +400,14 @@ final class RearDisplay {
             }
             int current = state.getInt(area);
             if (classic >= 0 && classic != current) state.setInt(area, classic);
-            Log.i(TAG, "window extensions ready, rear state " + current + " -> " + state.getInt(area));
+            FoldLog.i("window extensions ready, rear state " + current + " -> " + state.getInt(area));
         } catch (Throwable t) {
-            Log.w(TAG, "window extensions ready, could not select the classic rear state: " + t);
+            FoldLog.w("window extensions ready, could not select the classic rear state: " + t);
         }
     }
 
     private void onExtensionStatus(int s) {
-        if (s != extStatus) Log.i(TAG, "rear display status " + s + ", state " + extensionDeviceState());
+        if (s != extStatus) FoldLog.i("rear display status " + s + ", state " + extensionDeviceState());
         extStatus = s;
         onStateChanged();
     }
@@ -417,7 +415,7 @@ final class RearDisplay {
     private void startExtensionSession(Activity activity, int gen) throws Exception {
         Method start = area.getClass().getMethod("startRearDisplaySession", Activity.class, extConsumer);
         Object session = consumer(v -> {
-            Log.i(TAG, "rear display session " + v);
+            FoldLog.i("rear display session " + v);
             if ((Integer) v == SESSION_INACTIVE) requestEnded(gen);
             else requestActivated(gen);
         });
@@ -502,7 +500,7 @@ final class RearDisplay {
                                     : (Integer) s.getClass().getMethod("getIdentifier").invoke(s);
                             main.post(() -> {
                                 hiddenState = id;
-                                Log.i(TAG, "device state " + id);
+                                FoldLog.i("device state " + id);
                                 onStateChanged();
                             });
                         }
@@ -512,7 +510,7 @@ final class RearDisplay {
                     .invoke(dsm, (Executor) main::post, cb);
             hiddenWatched = true;
         } catch (Throwable t) {
-            Log.e(TAG, "could not watch device state", unwrap(t));
+            FoldLog.e("could not watch device state", unwrap(t));
         }
     }
 
@@ -528,7 +526,7 @@ final class RearDisplay {
         }
         wasActive = active;
         if (inherited && !ownRequest && !isRearActive()) {
-            Log.i(TAG, "earlier or adopted request is gone");
+            FoldLog.i("earlier or adopted request is gone");
             setOwn(false);  // rear display is off, so the request we had to end has ended
         }
         notifyListeners();
