@@ -6,12 +6,19 @@
 
     <uses-sdk android:minSdkVersion="33" android:targetSdkVersion="35" />
 
-    <!-- directBootAware: the fix must also work on the lock screen right after a reboot. -->
+    <!-- directBootAware: the fix must also work on the lock screen right after a reboot.
+         hardwareAccelerated="false": every window of FoldFix is drawn in software, the landscape
+         fix's overlay included, so the process the service runs in never uses the GPU. A GPU fault
+         aborts the whole process, and a GPU that hangs blocks the service's main thread
+         ("Drawn in software" in docs/how-it-works.md). Android's text magnifier and its long
+         screenshots ignore this setting and use the GPU in the app's process, so the status
+         screen has no selectable text and is excluded from scroll capture (see MainActivity). -->
     <application
         android:label="@string/app_name"
         android:icon="@mipmap/ic_launcher"
         android:allowBackup="false"
         android:directBootAware="true"
+        android:hardwareAccelerated="false"
         android:supportsRtl="true"
         android:theme="@style/Theme.FoldFix">
 

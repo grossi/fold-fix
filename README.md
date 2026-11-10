@@ -323,7 +323,7 @@ Reports from other devices and Android versions are the most useful contribution
 
 - device model and Android build (`adb shell getprop ro.build.fingerprint`),
 - what happened when folding and unfolding,
-- what FoldFix's status screen shows, and its **Version** line copied as it is (for example `1.0.2 (3), official release`): it says exactly which build is installed,
+- what FoldFix's status screen shows, and its **Version** line copied as it is (a long press copies it), for example `1.0.2 (3), official release`: it says exactly which build is installed,
 - the output of the checks in [docs/diagnosis.md](docs/diagnosis.md),
 - FoldFix's log while you fold and unfold a few times: `adb logcat -s FoldFix`.
 

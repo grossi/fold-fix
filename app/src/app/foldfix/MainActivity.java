@@ -1,6 +1,8 @@
 package app.foldfix;
 
 import android.accessibilityservice.AccessibilityServiceInfo;
+import android.animation.ObjectAnimator;
+import android.animation.StateListAnimator;
 import android.app.Activity;
 import android.content.ClipData;
 import android.content.ClipboardManager;
@@ -11,6 +13,7 @@ import android.content.pm.Signature;
 import android.content.pm.SigningInfo;
 import android.graphics.Insets;
 import android.graphics.Typeface;
+import android.graphics.drawable.RippleDrawable;
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
@@ -78,6 +81,9 @@ public class MainActivity extends Activity implements SensorEventListener {
         list.setPadding(pad, pad, pad, pad);
         ScrollView scroll = new ScrollView(this);
         scroll.addView(list);
+        // Kept out of long screenshots ("Capture more"): Android renders those with the GPU, in
+        // the app's process, even for an app that is drawn in software (see the manifest).
+        scroll.setScrollCaptureHint(View.SCROLL_CAPTURE_HINT_EXCLUDE | View.SCROLL_CAPTURE_HINT_EXCLUDE_DESCENDANTS);
         scroll.setOnApplyWindowInsetsListener((v, insets) -> {
             Insets i = insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
             v.setPadding(i.left, i.top, i.right, i.bottom);
@@ -113,12 +119,8 @@ public class MainActivity extends Activity implements SensorEventListener {
         accessText = section("Rear-display access");
         TextView cmd = text(RearDisplay.ADB_COMMAND, 13, false);
         cmd.setTypeface(Typeface.MONOSPACE);
-        cmd.setTextIsSelectable(true);
-        Button copy = button("Copy adb command", () -> {
-            getSystemService(ClipboardManager.class)
-                    .setPrimaryClip(ClipData.newPlainText("adb command", RearDisplay.ADB_COMMAND));
-            Toast.makeText(this, "Copied", Toast.LENGTH_SHORT).show();
-        });
+        copyOnLongPress(cmd, "adb command");
+        Button copy = button("Copy adb command", () -> copy("adb command", RearDisplay.ADB_COMMAND));
         LinearLayout command = new LinearLayout(this);
         command.setOrientation(LinearLayout.VERTICAL);
         command.addView(cmd);
@@ -129,7 +131,7 @@ public class MainActivity extends Activity implements SensorEventListener {
         // The line to copy into a bug report.
         TextView version = section("Version");
         version.setText(describeBuild());
-        version.setTextIsSelectable(true);
+        copyOnLongPress(version, "FoldFix version");
     }
 
     @Override
@@ -296,7 +298,24 @@ public class MainActivity extends Activity implements SensorEventListener {
     @Override
     public void onAccuracyChanged(Sensor s, int accuracy) {}
 
+    void copy(String label, CharSequence text) {
+        getSystemService(ClipboardManager.class).setPrimaryClip(ClipData.newPlainText(label, text));
+        Toast.makeText(this, "Copied", Toast.LENGTH_SHORT).show();
+    }
+
     // ---- tiny view helpers ------------------------------------------------------------------
+
+    /**
+     * A long press copies the whole text. The text isn't made selectable instead: selecting brings
+     * up Android's text magnifier, which is drawn with the GPU even in an app that is drawn in
+     * software, and FoldFix keeps the GPU out of its process (see the manifest).
+     */
+    void copyOnLongPress(TextView t, String label) {
+        t.setOnLongClickListener(v -> {
+            copy(label, t.getText());
+            return true;
+        });
+    }
 
     TextView section(String title) {
         TextView t = text(title, 17, true);
@@ -320,6 +339,21 @@ public class MainActivity extends Activity implements SensorEventListener {
         b.setText(label);
         b.setAllCaps(false);
         b.setOnClickListener(v -> onClick.run());
+        // FoldFix is drawn in software (see the manifest), and the theme's ripple can't be: it shows
+        // nothing and logs an error for every frame of a press. So the button keeps the ripple's
+        // shape as its background, without the ripple, and shows a press by dimming. That takes
+        // the place of the theme's animator, which only moves a shadow that isn't drawn either.
+        if (b.getBackground() instanceof RippleDrawable) {
+            RippleDrawable ripple = (RippleDrawable) b.getBackground();
+            if (ripple.getNumberOfLayers() > 0 && ripple.getId(0) != android.R.id.mask) {
+                b.setBackground(ripple.getDrawable(0));
+            }
+        }
+        StateListAnimator press = new StateListAnimator();
+        press.addState(new int[]{android.R.attr.state_pressed},
+                ObjectAnimator.ofFloat(b, View.ALPHA, 0.6f).setDuration(50));
+        press.addState(new int[0], ObjectAnimator.ofFloat(b, View.ALPHA, 1f).setDuration(150));
+        b.setStateListAnimator(press);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         lp.topMargin = dp(4);

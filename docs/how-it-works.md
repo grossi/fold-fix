@@ -100,6 +100,27 @@ Its accessibility configuration limits events to `com.android.systemui`. When lo
 
 The service looks for the hall sensor by its type number (65547), or by a sensor type name containing "hall", and prefers the wake-up variant. Events from it arrive even while the phone is asleep. A first value of at least `0.5` means closed (it reports `1.0` closed and `0.0` open).
 
+#### Drawn in software
+
+FoldFix is one process. Besides the service it holds everything FoldFix puts on screen: the status screen, the [trampoline](#3-the-trampoline-activity), the [curtain](#pixel-camera-on-screen-when-the-phone-is-opened) and the [landscape fix](#8-landscape-on-the-outer-screen)'s overlay. They share state that exists once per process (whose request is active, the last hall reading), so they can't be moved to processes of their own.
+
+All of it is drawn in software: the manifest sets `android:hardwareAccelerated="false"` for the whole app, which also covers the overlay, a window the service adds itself. The process then has no render thread and makes no use of the GPU.
+
+Two things in Android ignore that setting and bring a hardware renderer of their own into the app's process, so the status screen keeps clear of both:
+
+- The magnifier that shows while text is being selected. The status screen has no selectable text; a long press on the Version line or on the adb command copies it instead.
+- Long screenshots ("Capture more"), which Android renders from the app's scrolling view. The status screen's scrolling view is excluded from them, so only a normal screenshot is offered.
+
+The reason is what a GPU fault does to an app. Android's hardware renderer runs inside the app's process. When the GPU driver reports its device as lost, the renderer aborts the process, and while the GPU doesn't answer, the main thread waits for the render thread. On a Pixel Fold on Android 17 that happened three times during tests, each time with the status screen showing over the lock screen (which only test builds do). Two of the three read as follows; the third named another fault, `CS_INHERIT_FAULT`:
+
+```text
+Abort message: 'VK_ERROR_DEVICE_LOST (RenderThread, ...): Exception type 0x10001: GPU fault.'
+```
+
+In one of them, the GPU stopped answering when a simulated opening came. The service's main thread waited about 23 seconds for the render thread, until the abort, and the cancel it had just started wasn't carried out in that time. By the crash record it was removing a window, by all signs the landscape overlay: the service takes it away on open. Android restarted the service 2 seconds later. A phone opened by hand would have stayed on the outer screen for all of that.
+
+Why the GPU faulted isn't known, and it couldn't be reproduced on purpose. Older crash records on the same phone show the same abort in two other apps, so it isn't FoldFix's alone. Nothing FoldFix draws needs a GPU (text, a few buttons, a black rectangle, an empty view), so it does without. The cost, all on the status screen apart from the last: buttons have no ripple and no shadow (a pressed button is dimmed instead), scrolling past the end shows no stretch, text can be copied but not selected, there are no long screenshots, and switching to the inner screen took about 10 ms longer in the measurements (8 to 15 ms, depending on the runs compared).
+
 ### 2. Making the request
 
 Requests go through one of two backends, tried in this order.
