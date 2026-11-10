@@ -119,6 +119,7 @@ That's it. FoldFix starts by itself at every boot, even before you unlock the ph
 - Nothing to do. Fold and unfold as usual.
 - **Restart with the phone closed**, if your phone only detects the outer screen when it starts up closed. You can restart from the outer screen's power menu.
 - Other apps that use the outer screen on purpose, like Pixel Camera's rear-camera selfie mode, keep working.
+- If you open the phone while Pixel Camera is on screen, Camera follows to the inner screen after about 3 seconds. On the way, the inner screen briefly shows a "Front screen turned on" prompt and then goes black for a moment. See [Limitations](#limitations).
 - Landscape works on the outer screen (fullscreen video, auto-rotate). When an app first turns sideways, it can briefly show upside down before FoldFix corrects it. See [Limitations](#limitations).
 - After an Android update, open FoldFix once and check that everything is still OK.
 
@@ -138,6 +139,9 @@ Fold and unfold once. Then open FoldFix and check:
 - **Rear-display access** says `OK`.
 
 If it says `Open: another app is using the outer screen`, an app such as Pixel Camera switched screens while the phone was open. FoldFix leaves that alone, so switch back in that app. If the outer screen stays on after you've left the app, close and open the phone once: FoldFix ends any outer-screen request it finds still active on a closed phone when you open it.
+
+**Pixel Camera stays on the outer screen after opening the phone.**
+Camera, when it was opened on the closed phone, asks for the outer screen again as soon as the phone is opened. FoldFix undoes that once per opening, and Camera should appear on the inner screen after about 3 seconds. Now and then Camera asks once more after that, which FoldFix leaves alone. If it stays on the outer screen, and the inner screen keeps showing "Front screen turned on", close the phone and open it again, or leave Camera and then use the "Slide to use inner screen" control. Sliding while Camera is still on screen doesn't help: Camera asks for the outer screen again. Then please [open an issue](../../issues) with FoldFix's log (see [Contributing](#contributing)); the lines containing `another app turned rear display on` say what happened.
 
 **It says "Rear-display mode is unavailable right now".**
 Android sometimes refuses rear-display mode, possibly in battery saver or when the phone is hot. FoldFix keeps checking and switches as soon as Android allows it.
@@ -192,6 +196,8 @@ After uninstalling, only a restart helps.
 - **No half-open postures.** Tabletop mode and apps that adapt to a half-folded phone need the hinge angle.
 - **No fold/unfold animation.** It's driven by the hinge angle too.
 - **Landscape on the outer screen isn't seamless.** Rear-display mode is made for an open phone turned around, so Android turns landscape upside down in it. FoldFix corrects that, but it can't see which orientation an app asks for. When an app first turns sideways (going fullscreen with the phone already sideways), the picture can show upside down for about half a second. An app that goes back to portrait while you hold the phone sideways stays in landscape until you turn the phone upright.
+- **Pixel Camera needs a moment after unfolding.** Camera opened on the closed phone treats the outer screen as its rear-camera selfie mode, and asks for it again when the phone is opened. FoldFix ends that second request too, behind a black screen that stays for about 1.5 seconds, so Camera is usually usable on the inner screen about 3 seconds after unfolding; now and then it stays on the outer screen. It does this once per opening, also when Camera's rear-camera selfie mode was on while you closed the phone: after opening, Camera is on the inner screen. If you close the phone and open it again within about two seconds, Camera can still end up on the outer screen; close and open it once more. This has been measured with a simulated unfolding only, see [how it works](docs/how-it-works.md#pixel-camera-on-screen-when-the-phone-is-opened).
+- **Camera's selfie button on the closed phone** only makes the screen blink: Camera ends FoldFix's request, and FoldFix requests again.
 - **Unofficial interfaces.** FoldFix relies on private details of the system's window-manager extensions library and on the layout of SystemUI's dialog. An Android update could break it.
 - **Tested on one setup.** See [Tested on](#tested-on).
 - **It's a workaround.** The real fix is a hardware repair of the hinge flex cable or sensor.
@@ -211,7 +217,7 @@ It might also help **other foldables** with the same failure (dead hinge-angle s
 To enable an accessibility service, Android shows a strong warning that the app can view and control your screen. That's because accessibility services *could* read anything on screen. FoldFix uses the service for four things:
 
 1. starting automatically at boot and staying running,
-2. opening its own invisible screen from the background (Android only accepts a screen switch from the app in the foreground),
+2. opening its own screens from the background: an invisible one that switches screens (Android only accepts a screen switch from the app in the foreground), and a black one that covers Pixel Camera for a moment after unfolding,
 3. finding and tapping SystemUI's "Switch screens?" dialog,
 4. keeping landscape the right way up on the outer screen, with an invisible, zero-size overlay that only tells Android which orientation to use.
 
@@ -225,9 +231,9 @@ FoldFix:
 
 ## How it works
 
-In short: an accessibility service watches the hall sensor. When the phone closes, it briefly opens an invisible activity that asks Android for rear-display mode (outer screen on, inner off), using the system's own window-manager extensions library. It then taps the confirmation dialog that appears on the folded, unseen inner screen. When the phone opens, it ends the request. A reconcile loop keeps the sensor and the device state in agreement, so fast folding and unfolding can't leave it stuck.
+In short: an accessibility service watches the hall sensor. When the phone closes, it briefly opens an invisible activity that asks Android for rear-display mode (outer screen on, inner off), using the system's own window-manager extensions library. It then taps the confirmation dialog that appears on the folded, unseen inner screen. When the phone opens, it ends the request, and once more if the app on screen (Pixel Camera) asks for the outer screen again straight away. A reconcile loop keeps comparing the sensor with the device state, so a step that was missed during fast folding and unfolding is normally corrected at the next check.
 
-[docs/how-it-works.md](docs/how-it-works.md) covers the details: device states, the two ways of making the request, the dialog, the trampoline activity, why requests can outlive the app, and the guard against a missing outer screen.
+[docs/how-it-works.md](docs/how-it-works.md) covers the details: device states, the two ways of making the request, the dialog, the trampoline activity, why requests can outlive the app, what happens with Pixel Camera, and the guard against a missing outer screen.
 
 ## Build from source
 

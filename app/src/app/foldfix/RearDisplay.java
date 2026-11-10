@@ -44,7 +44,8 @@ import java.util.regex.Pattern;
  * </ul>
  *
  * <p>So an active request only ends when someone cancels it. FoldFix does that for its own
- * requests and for those it {@linkplain #adopt adopted}, and for no others.
+ * requests and for those it {@linkplain #adopt adopted}. The only other one it ends is the one
+ * {@link Curtain} is for.
  *
  * <p>One instance per process, shared by the service and the trampoline activity: the extension
  * keeps per-process session state. Everything runs on the main thread; listeners are posted.
@@ -60,6 +61,8 @@ final class RearDisplay {
     static final int STATE_REAR_DISPLAY_OUTER_DEFAULT = 5;
     /** A request still waiting for its dialog after this long is considered lost and redone. */
     static final long STALE_SESSION_MS = 10_000;
+    /** Rear-display mode going off within this long of a cancel made here is that cancel's doing. */
+    static final long CANCEL_EFFECT_MS = 2_000;
 
     // WindowAreaComponent values (stable extensions API).
     static final int STATUS_UNAVAILABLE = 1, STATUS_ACTIVE = 3;
@@ -101,6 +104,13 @@ final class RearDisplay {
     private volatile boolean sessionActive;
     /** Bumped per request, so a replaced request's "ended" callback can't clear the new one. */
     private volatile int generation;
+    /** How often rear-display mode has turned on, and whether it was on at the last look. */
+    private volatile int activations;
+    private boolean wasActive;
+    /** Real time (it counts sleep too) of the last cancel made here, until its effect is seen. */
+    private long cancelledAt;
+    /** Real time of the cancel made here that last turned rear-display mode off; else 0. */
+    private volatile long endingCancelAt;
 
     private RearDisplay(Context app) {
         dsm = app.getSystemService("device_state");
@@ -132,6 +142,24 @@ final class RearDisplay {
     boolean isRearActive() {
         if (area != null) return extStatus == STATUS_ACTIVE;
         return hiddenState == STATE_REAR_DISPLAY || hiddenState == STATE_REAR_DISPLAY_OUTER_DEFAULT;
+    }
+
+    /**
+     * Counts how often rear-display mode has turned on (1 or more while it is on). Unchanged means
+     * it didn't go off in between; a request replaced by another without that doesn't show.
+     */
+    int activations() {
+        return activations;
+    }
+
+    /**
+     * If rear-display mode last went off through a {@link #cancel} made in this process: when that
+     * cancel was made ({@code SystemClock.elapsedRealtime()}, taken before the call). 0 if
+     * something else ended it, or if it hasn't been seen going off. The time of the cancel, not of
+     * the callback, which can be late: so nothing counted from it can run longer than meant.
+     */
+    long endingCancelAt() {
+        return endingCancelAt;
     }
 
     /** False when the system currently refuses rear-display mode (e.g. battery saver, heat). */
@@ -246,8 +274,9 @@ final class RearDisplay {
 
     /**
      * Ends rear-display mode if it is active. Only call this for a request that is FoldFix's to
-     * end ({@link #hasOwnRequest}): the system cancels the active request whoever made it. Shows
-     * no dialog. Returns false if the system refused (caller not the top app).
+     * end ({@link #hasOwnRequest}), or from {@link Curtain}: the system cancels the active request
+     * whoever made it. Shows no dialog. Returns false if the system refused (caller not the top
+     * app).
      */
     boolean cancel() {
         if (!isRearActive()) {
@@ -258,6 +287,7 @@ final class RearDisplay {
             if (sessionStart == 0) setOwn(false);
             return true;
         }
+        long at = SystemClock.elapsedRealtime();
         try {
             if (area != null) {
                 area.getClass().getMethod("endRearDisplaySession").invoke(area);
@@ -271,6 +301,7 @@ final class RearDisplay {
             }
         }
         Log.i(TAG, "rear display request cancelled");
+        cancelledAt = at;
         generation++;
         setOwn(false);
         return true;
@@ -455,6 +486,14 @@ final class RearDisplay {
     // ---- helpers ------------------------------------------------------------------------
 
     private void onStateChanged() {
+        boolean active = isRearActive();
+        if (active && !wasActive) activations++;
+        if (!active && wasActive) {
+            long since = SystemClock.elapsedRealtime() - cancelledAt;
+            endingCancelAt = cancelledAt != 0 && since < CANCEL_EFFECT_MS ? cancelledAt : 0;
+            cancelledAt = 0;
+        }
+        wasActive = active;
         if (inherited && !ownRequest && !isRearActive()) {
             Log.i(TAG, "earlier or adopted request is gone");
             setOwn(false);  // rear display is off, so the request we had to end has ended

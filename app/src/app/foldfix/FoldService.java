@@ -26,8 +26,10 @@ import android.view.accessibility.AccessibilityWindowInfo;
  * <p>It never fights other apps: Pixel Camera's rear-screen selfie mode uses the same state and
  * dialog, so the service only answers the dialog of a request it made itself. The requests it
  * ends are its own, and any it found active while the phone was closed: that one is a leftover
- * which nothing else would end (see {@link RearDisplay#adopt}). Another app's request is never
- * touched while the phone stays open.
+ * which nothing else would end (see {@link RearDisplay#adopt}). A request another app makes while
+ * the phone is open is left alone, with one exception: the first one made within
+ * {@link #REREQUEST_MS} of the service ending a request on open is ended too, once (see
+ * {@link Curtain}). That one is Pixel Camera wanting back the mode it was started in.
  *
  * <p>While the phone is closed on the outer screen, {@link RotationFix} keeps landscape the right
  * way up (rear-display mode turns it upside down).
@@ -45,6 +47,8 @@ public class FoldService extends AccessibilityService implements SensorEventList
     static final int MAX_FAST_TRIES = 5;
     static final long DIALOG_WAIT_MS = 3_000; // how long a dialog may take to show up
     static final long BLOCKED_RECHECK_MS = 5_000;
+    /** Another app's request this soon after our cancel on open is a reflex, not the user's choice. */
+    static final long REREQUEST_MS = 3_000;
 
     /** What the service is doing, for the status screen; null while it isn't running. */
     static volatile String status;
@@ -71,6 +75,12 @@ public class FoldService extends AccessibilityService implements SensorEventList
     Boolean sensorClosed;
     long lastLaunch, lastRequest;
     int tries;
+    /** Real time of the first cancel sent since the last fold or unfold, 0 if there was none. */
+    long cancelSentAt;
+    /** The one follow-up of this opening is used up (see {@link Curtain}). */
+    boolean followedUp;
+    /** The last of another app's requests that was looked at (see {@link RearDisplay#activations}). */
+    int otherSeen;
 
     @Override
     protected void onServiceConnected() {
@@ -122,6 +132,9 @@ public class FoldService extends AccessibilityService implements SensorEventList
         closed = hallClosed = c;
         lastLaunch = 0;
         tries = 0;
+        cancelSentAt = 0;
+        followedUp = false;
+        otherSeen = 0;
         reconcile();
     }
 
@@ -191,12 +204,19 @@ public class FoldService extends AccessibilityService implements SensorEventList
             }
             setStatus("Closed: switching to the outer screen");
         } else {
+            // Rear display back on through another app's request, and the last time it went off was
+            // the doing of a cancel sent since the phone was opened.
+            long cancelled = rd.endingCancelAt();
+            if (rear && !ours && cancelSentAt != 0 && cancelled >= cancelSentAt
+                    && otherSeen != rd.activations()) {
+                followUp(cancelled);
+            }
             // Also look for a dialog shortly after our last request: one can still pop up after
             // ownership was dropped, and tapping "Switch" there would strand the phone in
             // rear-display mode while open.
             boolean recent = now - lastRequest < DIALOG_WAIT_MS;
             // Nothing of ours to undo. A request another app made while the phone is open (the
-            // real selfie mode) is left alone, even right after we ended one.
+            // real selfie mode) is left alone, apart from the one followUp() deals with.
             if (!ours && !recent) {
                 tries = 0;
                 setStatus(rear ? "Open: another app is using the outer screen" : "Open: inner screen on");
@@ -217,6 +237,27 @@ public class FoldService extends AccessibilityService implements SensorEventList
             setStatus("Open: switching back to the inner screen");
         }
         h.postDelayed(reconcile, now - lastLaunch < DIALOG_WAIT_MS ? POLL_MS : retryDelay());
+    }
+
+    /**
+     * Another app got rear-display mode after a cancel of ours, made at real time
+     * {@code cancelled}, ended it on open. If that was the first time and within
+     * {@link #REREQUEST_MS} of that cancel, it is the app on screen asking again for the mode it
+     * was started in (Pixel Camera does): end that request too, once, behind the curtain. Anything
+     * later or repeated is the app's business, and is only logged. Real time, not uptime, so that
+     * sleeping doesn't stretch the window.
+     */
+    void followUp(long cancelled) {
+        otherSeen = rd.activations();
+        long after = SystemClock.elapsedRealtime() - cancelled;
+        String what = "another app turned rear display on " + after + " ms after our cancel: ";
+        if (followedUp || after >= REREQUEST_MS) {
+            Log.i(TAG, what + "left alone");
+            return;
+        }
+        followedUp = true;
+        Log.i(TAG, what + "ending that once");
+        Curtain.start(this, cancelled + REREQUEST_MS, otherSeen);
     }
 
     long retryDelay() {
@@ -241,6 +282,8 @@ public class FoldService extends AccessibilityService implements SensorEventList
         if (Trampoline.REQUEST.equals(action)) {
             lastRequest = now;
             rd.markRequestPending();
+        } else if (cancelSentAt == 0) {
+            cancelSentAt = SystemClock.elapsedRealtime();
         }
         Log.i(TAG, action + " rear display (try " + tries + ", " + rd.describeState() + ")");
         Trampoline.start(this, action);

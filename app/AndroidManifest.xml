@@ -43,6 +43,20 @@
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|density|keyboardHidden|uiMode"
             android:theme="@style/Theme.FoldFix.Invisible" />
 
+        <!-- Black screen that ends the request Pixel Camera makes right after FoldFix ended its own
+             on open, and covers Camera for a moment (see Curtain). Only FoldFix starts it. -->
+        <activity
+            android:name=".Curtain"
+            android:directBootAware="true"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:showWhenLocked="true"
+            android:taskAffinity="app.foldfix.curtain"
+            android:launchMode="singleInstance"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|density|keyboardHidden|uiMode"
+            android:theme="@style/Theme.FoldFix.Curtain" />
+
         <!-- Test hook: makes the service act on a simulated hall reading (see HallOverride).
              Like the trampoline, exported only to holders of DUMP: the adb shell and privileged
              system apps, and any other app only if DUMP is granted to it over adb. -->
