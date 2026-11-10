@@ -12,7 +12,7 @@ import android.content.Intent;
  * <p>A launch can arrive late (the screen was off, the system was busy), so both actions check
  * again that they are still wanted before they do anything (see {@link Stale}).
  *
- * <p>Only FoldFix itself and the adb shell may start it (see the manifest). For testing:
+ * <p>Only FoldFix itself and holders of {@code DUMP} may start it (see the manifest). For testing:
  * {@code adb shell am start -n app.foldfix/.Trampoline --es action request|cancel}. With
  * {@code --ez force true}, a cancel skips that check and ends whatever request is active. That
  * is for tests only: {@link #start} never sets it.

@@ -30,7 +30,7 @@ The code is in `app/src/app/foldfix/`:
 | `Trampoline.java` | Invisible activity that makes the request or cancel as the top app |
 | `Curtain.java` | Black screen that ends Pixel Camera's repeat request on open and covers Camera for a moment |
 | `Stale.java` | The check the trampoline and the curtain make again when they run |
-| `Hardware.java` | Finds the hall sensor; checks whether the outer display exists |
+| `Hardware.java` | Finds the hall sensor; checks whether the outer screen was detected |
 | `FoldLog.java` | The one way FoldFix logs: to Android's log, and into a short history kept in memory |
 | `App.java` | Marks the start of the process in that history; knows which build is installed |
 | `HallOverride.java` | Test hook: lets adb simulate folding and unfolding |
@@ -51,9 +51,9 @@ On the Pixel Fold, `adb shell cmd device_state print-states` lists:
 | 0 | `CLOSED` | Folded. Outer screen on. | Normally chosen from the hinge angle. Apps can't request it. |
 | 1 | `HALF_OPENED` | Partly open (tabletop / book posture). | Needs the hinge angle. Unavailable on affected phones. |
 | 2 | `OPENED` | Unfolded. Inner screen on. | Where affected phones get stuck. |
-| 3 | `REAR_DISPLAY_STATE` | Classic rear-display mode: outer screen on, inner screen off. | **FoldFix uses this.** Also used by Pixel Camera's rear-camera selfie mode. |
+| 3 | `REAR_DISPLAY_STATE` | Classic rear-display mode: outer screen on, inner screen off. | **FoldFix uses this.** An app's request for it has to be confirmed in a "Switch screens?" dialog. |
 | 4 | `CONCURRENT_INNER_DEFAULT` | Both screens on. | Dual-screen features. Ends when the requesting app leaves the foreground. |
-| 5 | `REAR_DISPLAY_OUTER_DEFAULT` | Newer rear-display mode ("v2"). The outer screen becomes the default, but the inner screen stays on with a "Front screen turned on / Slide to use inner screen" prompt. | Wrong for a closed phone. See [below](#window-extensions-the-primary-path). |
+| 5 | `REAR_DISPLAY_OUTER_DEFAULT` | Newer rear-display mode ("v2"). The outer screen becomes the default, but the inner screen stays on with a "Front screen turned on / Slide to use inner screen" prompt. | Needs no dialog. Pixel Camera's Rear Camera Selfie mode asked for this state every time it was observed. Wrong for a closed phone. See [below](#window-extensions-the-primary-path). |
 
 There are two layers:
 
@@ -101,9 +101,9 @@ FoldFix's service (`app.foldfix.FoldService`) is an accessibility service becaus
 
 - It starts automatically at boot, including before the first unlock (direct-boot aware), and the system keeps it running.
 - It's allowed to start activities from the background, but only while it's bound. Android exempts bound accessibility services from its background-activity-launch restrictions. Once the user turns the service off, the exemption is gone and its launches are blocked (`BAL_BLOCK`). See [Turning FoldFix off](#turning-foldfix-off).
-- It can see and tap SystemUI's confirmation dialog.
+- It can see and tap System UI's confirmation dialog.
 
-Its accessibility configuration limits events to `com.android.systemui`. When looking for the dialog, the service only opens windows of type `TYPE_SYSTEM`, and only searches those whose package is `com.android.systemui`, by view ID. It never opens other apps' windows and doesn't read or keep any screen text. The app requests no Android permissions.
+Its accessibility configuration limits events to `com.android.systemui`. When looking for the dialog, the service only opens windows of type `TYPE_SYSTEM`, and only searches those whose package is `com.android.systemui`, by view ID. Going by Android's source, `TYPE_SYSTEM` also covers the overlay windows that other apps draw on top of the screen (this wasn't checked on the phone: none was up). The service then opens such a window as well, reads which package it belongs to, and leaves it. It never opens an app's ordinary windows and doesn't read or keep any screen text. The app requests no Android permissions.
 
 The service looks for the hall sensor by its type number (65547), or by a sensor type name containing "hall", and prefers the wake-up variant. Events from it arrive even while the phone is asleep. A first value of at least `0.5` means closed (it reports `1.0` closed and `0.0` open).
 
@@ -118,7 +118,7 @@ Two things in Android ignore that setting and bring a hardware renderer of their
 - The magnifier that shows while text is being selected. The status screen has no selectable text; a long press on the Version line, on the adb command or on the recent activity copies it instead.
 - Long screenshots ("Capture more"), which Android renders from the app's scrolling view. The status screen's scrolling view is excluded from them, so only a normal screenshot is offered.
 
-The reason is what a GPU fault does to an app. Android's hardware renderer runs inside the app's process. When the GPU driver reports its device as lost, the renderer aborts the process, and while the GPU doesn't answer, the main thread waits for the render thread. On a Pixel Fold on Android 17 that happened three times during tests, each time with the status screen showing over the lock screen (which only test builds do). Two of the three read as follows; the third named another fault, `CS_INHERIT_FAULT`:
+The reason is what a GPU fault does to an app. Android's hardware renderer runs inside the app's process. When the GPU driver reports its device as lost, the renderer aborts the process, and while the GPU doesn't answer, the main thread waits for the render thread. On a Pixel Fold on Android 17 that happened three times during tests, each time with the status screen showing over the lock screen (which only test builds do). Two of the three read as follows; the other one, the first of them, named another fault, `CS_INHERIT_FAULT`:
 
 ```text
 Abort message: 'VK_ERROR_DEVICE_LOST (RenderThread, ...): Exception type 0x10001: GPU fault.'
@@ -154,7 +154,7 @@ Two details matter:
 - **State 3, not state 5.** Since Android 16, the library requests `REAR_DISPLAY_OUTER_DEFAULT` (5) by default. That shows no "Switch screens?" dialog. Instead it keeps the inner screen on with a "Slide to use inner screen" prompt, which is wrong for a closed phone. When it loads the library, FoldFix points it back at the classic rear-display state (3). It sets a private field of the library, using the library's own lookup for the classic state's ID. If a future update changes those internals, FoldFix logs a warning and the request still works, just in state 5.
 - **The first status callback is wrong.** Right after it's created, the library reports rear-display mode as "available" before it knows the device state. FoldFix registers its status listener slightly later, so the first status it gets is the correct one. If the listener can't be registered at all, FoldFix switches to the fallback below.
 
-Without the hidden-API exemption, Android's log shows FoldFix's own direct calls to the hidden API being denied (`blocked,test-api`), while requests through the library go through. A full switch (request → dialog confirmed → `REAR_DISPLAY_STATE`) takes about 0.25 to 0.5 seconds.
+Without the hidden-API exemption, Android's log shows FoldFix's own direct calls to the hidden API being denied (`blocked,test-api`), while requests through the library go through. A full switch (request → dialog confirmed → `REAR_DISPLAY_STATE`) takes about 0.2 seconds on a normal close: 0.18 to 0.24 seconds in the runs that were measured.
 
 #### The hidden `DeviceStateManager` API (fallback)
 
@@ -183,20 +183,20 @@ The device-state manager only accepts an app's request from the app that is **on
 
 So for both requests and cancels, the service starts a tiny invisible activity, `Trampoline`. (One cancel is made by a second activity, `Curtain`, for the same reason: see [Pixel Camera](#pixel-camera-on-screen-when-the-phone-is-opened).) It's transparent, has no animation, may show over the lock screen, makes the call, and finishes straight away.
 
-Other apps can't start it. It's protected by `android:permission="android.permission.DUMP"`, which only the system and the adb shell hold; FoldFix can always start its own activity.
+Ordinary apps can't start it. It's protected by `android:permission="android.permission.DUMP"`. The adb shell and privileged system apps hold that permission; any other app can only start the trampoline if the permission was granted to it over adb. FoldFix can always start its own activity.
 
 A launch can be delayed, for example while the screen is off, so the trampoline checks again when it runs:
 
-- A **request** is dropped if the phone has been opened by then.
+- A **request** is dropped if the phone has been opened by then. Only a definite "open" stops it. With no hall reading at all (the service has stopped, or has only just connected) the request is still made, and if the service has stopped, nobody is left to confirm its dialog. The log says `phone is open, dropping stale request`.
 - A **cancel** is dropped if the phone has been closed by then, or if no request is left that is FoldFix's to end (see [Whose request is it?](#6-whose-request-is-it)). The system ends whatever request is active when the cancel arrives. That could be FoldFix's new one on a phone that was closed again, which would turn the outer screen off for a moment, or one another app made in the meantime. The check is the one the service makes before it sends a cancel, so a late cancel does nothing a fresh one wouldn't. One difference: only a definite "closed" stops it. With no hall reading at all (the service has stopped, or has only just connected) it still goes through, because the request is FoldFix's to end either way. The log says `dropping stale cancel`.
 
 Being on top isn't always enough: a request made right after another switch can be refused because FoldFix isn't counted as a foreground app yet. The reconcile loop simply retries.
 
 ### 4. The "Switch screens?" dialog
 
-Every app request for classic rear-display mode makes SystemUI ask the user to confirm ("Switch screens?"). There is no "don't ask again" option.
+Every app request for classic rear-display mode makes System UI ask the user to confirm ("Switch screens?"). There is no "don't ask again" option.
 
-When the phone is closed, the request arrives while the inner screen is still the active one, so the dialog is drawn on the **inner screen, which is folded shut**. FoldFix finds it in SystemUI's windows and taps the confirm button, usually within about 0.2 seconds. Nobody sees it.
+When the phone is closed, the request arrives while the inner screen is still the active one, so the dialog is drawn on the **inner screen, which is folded shut**. FoldFix finds it in System UI's windows and taps the confirm button, usually within about 0.2 seconds. Nobody sees it.
 
 It identifies everything by view ID, not by text, so it works in any language:
 
@@ -214,7 +214,7 @@ There is one case where the dialog comes up on the outer screen, in front of the
 
 FoldFix looks for that dialog for the 10 seconds it gives any request of its own (see [the reconcile loop](#5-the-reconcile-loop)), not longer: after that it takes the request for lost, and a dialog still showing up couldn't be told from another app's. No dialog came that late in the tests. It showed within about a second of the other request becoming active each time, and one that went away with the screen turning off didn't come back when the screen was turned on again: its request stayed pending, unseen, until the active one ended. If the phone is opened while FoldFix's request is still waiting like this, both requests go (see [Other apps' leftover requests](#other-apps-leftover-requests)).
 
-Apart from that, FoldFix only taps a dialog that belongs to its own request.
+FoldFix can't tell whose request a dialog belongs to. So it only looks for the dialog while one of its own may be up: on a closed phone while a request of its own is under way, and on an open phone while a request is FoldFix's to end or its last request is less than 3 seconds old. Another app's "Switch screens?" dialog that came up in one of those moments would get the same answer.
 
 ### 5. The reconcile loop
 
@@ -226,16 +226,20 @@ FoldFix doesn't treat each sensor event as a one-off command. It keeps comparing
 | Closed | Active through another app's request, FoldFix's own still waiting for its dialog | Confirm the dialog once it shows, so that FoldFix's request replaces the other one |
 | Closed | Not active, FoldFix's request waiting for its dialog | Confirm the dialog once it shows |
 | Closed | Not active, no request of FoldFix's in flight | Request |
-| Open | Active with FoldFix's request, or one that was active while the phone was closed | End the request |
-| Open | FoldFix's request waiting for its dialog | Tap **Cancel** in the dialog when it shows (the only way to drop it). A request of another app that was active when the phone was opened is ended as well |
+| Closed | Not active, and the outer screen wasn't detected or Android reports rear-display mode as unavailable | Nothing, not even a look for the dialog. Check again in 5 seconds |
+| Open | Active with FoldFix's request, or one that was active while the phone was closed | End the request. If a "Switch screens?" dialog is up at that moment, tap **Cancel** in it first and end the request in the next step |
+| Open | FoldFix's request waiting for its dialog | Tap **Cancel** in the dialog when it shows (the only way to drop it). A request of another app that was active when the phone was opened is ended as well, and so is one that becomes active later, while FoldFix's is still waiting |
 | Open | Another app's request, the first one made within 3 s of FoldFix's cancel | End it too, once per opening, behind a black screen (see [Pixel Camera](#pixel-camera-on-screen-when-the-phone-is-opened)) |
 | Open | Any other request another app made while open, or none | Nothing (but still cancels a dialog appearing within 3 s of its last request) |
 
 Timing:
 
-- While a launch is recent (within 3 seconds), it checks every **200 ms**. Accessibility events from System UI also wake it up immediately when a dialog appears.
-- Requests and cancels share one retry schedule: every **2 seconds**, then every **30 seconds** after 5 tries that didn't help. Each fold or unfold resets it.
-- Nothing is resent while FoldFix's own request is still in flight. A request waiting for its dialog is given up to **10 seconds**; after that it's treated as lost, ended and replaced.
+- For 3 seconds after it has started the trampoline, it checks every **200 ms**. Accessibility events from System UI also wake it up immediately when a dialog appears.
+- Those 3 seconds count from the last launch since the phone was last closed or opened: every fold or unfold forgets the time of the launch before it. An opening that finds a request active launches the cancel, and so polls. An opening that finds FoldFix's request still waiting for its dialog launches nothing: FoldFix then looks again after 2 seconds, not 200 ms, and relies on System UI's event to find the dialog sooner.
+- Requests and cancels share one retry schedule. A launch that didn't help is repeated once **more than 2 seconds** have passed since it. FoldFix is looking every 200 ms at that point, so the launches come **2.2 seconds** apart. After 5 launches that didn't help, the wait is 30 seconds, and the timer for it is only set when the 3 seconds of looking every 200 ms are over: the launches then come **33 seconds** apart. Anything else that wakes the loop (a change of the device state, an event from System UI) can bring a launch sooner, but never less than 2 or 30 seconds after the last one. Each fold or unfold starts the schedule over.
+- Nothing is resent while FoldFix's own request is still in flight. A request waiting for its dialog is given up to **10 seconds**; after that, on a closed phone, it's treated as lost, ended and replaced.
+- On an open phone, a request of FoldFix's that still waits for its dialog can only be dropped once the dialog shows. From 3 seconds after the request, FoldFix sets no timer for that. The status reads `Open: waiting for the request's dialog to cancel it`, and it stays until something else wakes the loop: the dialog showing, a change of the device state, the trampoline arriving late and dropping its request, or the phone being closed. For as long as it stays, the waiting request counts as FoldFix's to end, and FoldFix can't tell it from the active one. So if the dialog never comes (a request can get lost), a request that another app makes later on the open phone, such as Rear Camera Selfie mode, is ended like one of FoldFix's own, however long after the opening. That cancel also drops FoldFix's claim. What the app requests after it falls under the usual rules for an open phone, the [Pixel Camera](#pixel-camera-on-screen-when-the-phone-is-opened) one included.
+- While the outer screen isn't detected, or Android reports rear-display mode as unavailable, a closed phone without rear-display mode is only checked again every **5 seconds**. FoldFix doesn't look for the dialog in that time. A request made just before the mode became unavailable keeps its dialog, on the folded inner screen, until the mode is available again or the phone is opened.
 - It does nothing until it knows both the hall reading and the device state. Acting before the state is known can put a dialog on the outer screen.
 - If neither backend is usable, it stops and the status shows the adb hint. That can only change after a restart.
 
@@ -247,7 +251,7 @@ Reacting to single sensor events isn't enough: a fast close, open, close while a
 
 Some facts about requests that shaped the design:
 
-- **A cancel from the top app ends whatever request is active, whoever made it.** The system doesn't check ownership. So which requests get cancelled is decided by FoldFix's own logic: it tracks whether the active or pending request is its own, or one it took over (see [below](#other-apps-leftover-requests)), and never cancels otherwise, with [one exception](#pixel-camera-on-screen-when-the-phone-is-opened). A request another app makes while the phone is open, such as Pixel Camera's rear-camera selfie mode, is left alone, unless the user ends it with the [status screen's button](#the-status-screens-button).
+- **A cancel from the top app ends whatever request is active, whoever made it.** The system doesn't check ownership. So which requests get cancelled is decided by FoldFix's own logic: it tracks whether the active or pending request is its own, or one it took over (see [below](#other-apps-leftover-requests)), and never cancels otherwise, with [one exception](#pixel-camera-on-screen-when-the-phone-is-opened). A request another app makes while the phone is open, such as Pixel Camera's Rear Camera Selfie mode, is left alone, unless the user ends it with the [status screen's button](#the-status-screens-button), or a request of FoldFix's own is still waiting for a dialog that never came (see the timing notes under [the reconcile loop](#5-the-reconcile-loop)).
 - **A waiting request can't be cancelled through the API.** Until its dialog is answered, only the dialog's buttons resolve it (see [the dialog](#4-the-switch-screens-dialog)).
 - **An active request outlives the process that made it.** The system keeps an active rear-display request (state 3 or 5) until the device reaches CLOSED, which a dead hinge sensor never reports. Only *pending* requests (not yet confirmed) die with their process.
 
@@ -257,12 +261,12 @@ Because of the last point, FoldFix saves "a request that FoldFix has to end may 
 
 The last point holds for every app's request, not just FoldFix's. On an affected phone, a request that Pixel Camera made stays active after Camera is left, and even after it is force-stopped. If the phone is closed at that point, FoldFix sees rear-display mode active and has nothing to do. If it only ever ended its own requests, the phone would then stay on the outer screen after every unfolding. With Camera's state-5 request, the inner screen would show System UI's "Front screen turned on / Slide to use inner screen" prompt instead of the user's apps.
 
-So FoldFix follows one rule: **a rear-display request that is active while the phone is closed is FoldFix's to end when the phone opens, whoever made it.** Nobody uses rear-camera selfie mode with the phone shut, so a request seen there is either FoldFix's own or a leftover.
+So FoldFix follows one rule: **a rear-display request that is active while the phone is closed is FoldFix's to end when the phone opens, whoever made it.** Nobody uses Rear Camera Selfie mode with the phone shut, so a request seen there is either FoldFix's own or a leftover.
 
 - When the hall sensor reads closed and rear-display mode is active through a request that isn't FoldFix's, FoldFix takes the request over ("adopts" it) and logs that. The saved flag covers it, so this survives a FoldFix restart too.
 - It waits with that for a moment after a request of its own ended or was cancelled. FoldFix hears of the end just before the system reports rear-display mode as off, and what looks like an active request in between is the one that has just ended. This is what happens at most taps on [Pixel Camera's selfie button](#pixel-cameras-selfie-button) on the closed phone (11 of 12 when counted). The wait is 2 seconds at most. After the end of FoldFix's own request it is over as soon as rear-display mode is next reported, on or off: when a request from the adb shell took the place of FoldFix's own, that report came within milliseconds. After a cancel FoldFix made itself, only a report that the mode is off ends it early.
 - On open, it ends an adopted request exactly like its own.
-- Rear-display mode that is on at the moment the phone is opened was on while it was closed, so the active request is ended then, also if FoldFix hadn't taken it over yet. That is the case when another app's request became active while FoldFix's own was still waiting for its dialog: FoldFix ends the active one, and taps **Cancel** in its own dialog when that shows, in whichever order the two come. (Before, a dialog that was already up was cancelled first, and the other app's request then counted as made on an open phone and stayed.) The log line is `opened with rear display on before a request of ours was reported active: taking the active one over`. It also appears when the phone is opened in the tenth of a second between FoldFix's own request becoming active and the system saying so; the request is ended either way.
+- Rear-display mode that is on at the moment the phone is opened was on while it was closed, so the active request is ended then, also if FoldFix hadn't taken it over yet. That is the case when another app's request became active while FoldFix's own was still waiting for its dialog: FoldFix ends the active one, and taps **Cancel** in its own dialog when that shows. If the dialog is already up when the phone is opened, Cancel is tapped in it first, and the active request is ended in the next step, when no dialog is up. (Before, the other app's request counted as made on an open phone after that tap, and stayed.) The log line is `opened with rear display on before a request of ours was reported active: taking the active one over`. It also appears when the phone is opened in the tenth of a second between FoldFix's own request becoming active and the system saying so; the request is ended either way.
 - It ends it once. A new request another app makes while the phone is open is then treated like any request made on an open phone: left alone, apart from the first one made straight away (see [below](#pixel-camera-on-screen-when-the-phone-is-opened)). A request that is left alone is adopted at the next close and ended at the next open.
 - A request FoldFix took over, from another app or from an earlier FoldFix process, has no callback of its own. If another request takes its place without rear-display mode going off in between, nothing tells FoldFix, and it ends that one on open as well. On a closed phone that is the rule anyway. On an open phone it would take an app that asks for rear-display mode on top of an active request, in the moment between the unfolding and FoldFix's cancel (normally well under a second; longer if the system refuses the cancel and FoldFix has to retry). None is known: Pixel Camera makes no request while the mode is on, and its selfie button ends the active request, which FoldFix sees. With a request from the adb shell it has been seen. (A request that takes the place of one FoldFix made itself in this process is reported, and is left alone on an open phone.)
 - While the phone stays closed, FoldFix doesn't replace an adopted request with its own. Cancelling would blank the screen the user is looking at, and the other app could request again. The one exception needs no cancel: a request of FoldFix's own that was already waiting for its dialog when the other one became active. Confirming that dialog puts FoldFix's request in place of the other (see [the dialog](#4-the-switch-screens-dialog)). See [What FoldFix can't do](#what-foldfix-cant-do) for the cost.
@@ -280,25 +284,26 @@ What was measured on a Pixel Fold on Android 17, with the lock-screen camera and
 So on open, FoldFix does one more thing. If its cancel has ended its request, and the first request another app makes follows within **3 seconds** of that cancel, the service starts `Curtain`: a plain black, opaque activity. Like the trampoline, it ends the request as the top app. Unlike the trampoline, it then stays on top for **1.5 seconds** after rear-display mode went off, and only then finishes. Camera comes back on the inner screen and normally stays there (see the limits below).
 
 - **Once per opening.** The service starts the curtain at most once between an unfolding and the next fold, and the curtain tries its cancel once. If the other app asks yet again, or the cancel is refused, the request is left alone, as before. So an opening costs at most two successful cancels: FoldFix's own request, and this one.
-- **Only straight after FoldFix's own cancel.** The 3 seconds count from the cancel FoldFix made on that opening, and only if rear-display mode went off through it (within 2 seconds of it). A switch-off from anything else, such as System UI's control or the other app, starts nothing. A request made later, or on an opening where FoldFix had nothing to end, is the user's choice (the real selfie mode) and is never touched. Someone who opens Camera and picks the selfie mode within 3 seconds of unfolding would see the mode end once; choosing it again would work.
+- **Only straight after FoldFix's own cancel.** The 3 seconds count from the cancel FoldFix made on that opening, and only if rear-display mode went off through it (within 2 seconds of it). A switch-off from anything else, such as System UI's control or the other app, starts nothing. A request made later, or on an opening where FoldFix had nothing to end, is the user's choice (the real selfie mode) and isn't touched by this rule. Someone who opens Camera and picks the selfie mode within 3 seconds of unfolding would see the mode end once; choosing it again would work.
 - **Also after the real selfie mode.** If the phone is closed and opened again while Camera's own selfie mode is on, FoldFix takes the request over on close, ends it on open, and ends Camera's repeat request with the curtain. Camera ends up on the inner screen. Before, it went back to the outer one.
 - **Checked again when it runs.** The curtain does nothing if the 3 seconds are over by the time it runs, if the phone isn't open, if rear-display mode is off already or went off and on again since the curtain was started, or if the active request is FoldFix's. So the curtain makes no cancel later than 3 seconds after FoldFix's own, in real time: neither a phone that slept in between nor a callback that arrived late stretches that. Once it is up, the curtain is gone after 4 seconds at most. If the phone is closed while it is up, it stays for the rest of its time, so the outer screen can be black for a moment.
 - **No look at other apps.** FoldFix doesn't know that the app is Camera. It only sees that rear-display mode came back on, through the same status callback as always.
 
-Every request that follows a cancel FoldFix made on that opening is logged with its timing, whether FoldFix acts on it or not:
+Every request that follows a cancel FoldFix made on that opening is logged with its timing, whether FoldFix acts on it or not. Lines from two runs:
 
 ```text
-another app turned rear display on 1038 ms after our cancel: ending that once
+another app turned rear display on 628 ms after our cancel: ending that once
 rear display request cancelled
 curtain: up, covering the other app for 1500 ms once rear display is off
-another app turned rear display on 5210 ms after our cancel: left alone
+another app turned rear display on 11922 ms after our cancel: left alone
 ```
 
 What it costs, and what isn't known:
 
-- The switch isn't clean. After unfolding, the inner screen comes on, shows System UI's prompt for a moment, goes black for about 1.5 seconds, and then shows Camera. Camera was usable 2.6 to 3.7 seconds after the simulated unfolding.
+- The switch isn't clean. After unfolding, the inner screen comes on, shows System UI's prompt for a moment, goes black for about 1.5 seconds, and then shows Camera. Camera was back on screen 2.2 to 3.7 seconds after the simulated unfolding, and once after 4.6 seconds, when FoldFix's own cancel took 2 seconds to get through.
 - This was only measured with a simulated opening and the lock-screen camera. Why Camera asks again isn't known, so the two delays are measured values with a margin, not guarantees: in 1 of 70 simulated openings Camera asked again about a second after the curtain had gone. If Camera asks later than 3 seconds on a phone opened by hand, or asks again after the curtain, the result is the old behaviour: Camera on the outer screen, until the phone is closed and opened again, or until Camera is left and System UI's control is used.
 - Closing the phone and opening it again within a second or two, with Camera on screen, used to leave Camera on the outer screen now and then. Camera's repeat request can become active while FoldFix's own new request is still waiting for its dialog; if the phone was opened just as that dialog showed, FoldFix dropped its own request and left Camera's. Now it ends Camera's as well (see [Other apps' leftover requests](#other-apps-leftover-requests)), and Camera's next request is dealt with behind the curtain as on any opening. With a request from the adb shell in Camera's place and a simulated opening within half a second of it, the phone was back on the inner screen in 28 of 28 runs, 5 of them with the dialog answered first; on the build before, 1 run of 22 stayed on the outer screen. With Camera itself, 16 simulated open, close, open sequences (closed 0.2 to 0.6 seconds after the first opening, for 0.1 to 0.6 seconds) all ended on the inner screen; in one of them Camera's request got in ahead of FoldFix's. What is still left alone is a request Camera makes only after the phone is open again, on an opening where FoldFix had nothing active to end. Camera made no such request in those 16 runs.
+- Pixel Camera itself crashed twice during the tests, with an uncaught `SecurityException`, when the system refused its repeat request: once in an open, close, open sequence, and once 2.7 seconds after a tap on its selfie button on the closed phone. How often that happens wasn't looked into.
 - On the closed phone, Camera's selfie button can't do anything useful. See [Cameras on the closed phone](#9-cameras-on-the-closed-phone).
 
 #### Turning FoldFix off
@@ -313,7 +318,7 @@ The service doesn't count this cancel as one of its own. A tap while a cancel of
 
 ### 7. The outer-screen guard
 
-FoldFix never requests rear-display mode unless Android detected the outer display. Otherwise it does nothing, and the status screen says to restart with the phone closed.
+FoldFix never requests rear-display mode unless Android detected the outer screen. Otherwise it does nothing, and the status screen says to restart with the phone closed.
 
 The reason: moving the default display to a panel that doesn't exist can take down `system_server`. Forcing CLOSED in that situation crashed it with:
 
@@ -370,10 +375,11 @@ So while FoldFix holds rear-display mode, the cameras are told that the phone is
 
 #### No front camera on the test phone
 
-On the test phone, a Pixel Fold on Android 17, that swap leads nowhere, because there is no front-facing camera ID. `adb shell dumpsys media.camera` shows the same in state 2 and in state 3:
+On the test phone, a Pixel Fold on Android 17, that swap leads nowhere, because there is no front-facing camera ID. `adb shell dumpsys media.camera` shows the same in state 2 and in state 3 (an excerpt, with the lines shortened):
 
 ```text
 Number of camera devices: 1
+...
     Device 0 maps to "0"
 ...
   camera_status_map_:
@@ -384,6 +390,7 @@ Number of camera devices: 1
     FrontOuter hal id: 5, status: Not present
     RearTele hal id: 4, status: Present
 == Camera HAL device device@1.1/internal/0 (v1.4) static information: ==
+...
     Facing: Back
 ```
 
@@ -391,13 +398,11 @@ Number of camera devices: 1
 - The HAL reports the outer screen's camera (`FrontOuter`) as not present. The inner screen's camera (`FrontInner`) is present, but isn't offered either: on each device-state change the HAL reports a status for the front cameras, and the camera service answers that it doesn't know that device (`says an unknown camera device device@1.1/internal/1-5 is not present. Curious.`).
 - The static parts of the two dumps are identical, and state 2 is what the phone is in without FoldFix. So this isn't caused by rear-display mode, and nothing FoldFix does while running changes it. (State 2 was reached by simulating an opening; the phone itself stayed shut.)
 
-Why the outer screen's camera is missing can't be told from the outside. It sits in the same half as the outer screen, behind the hinge, so the damage that silenced the hinge sensor is the likely cause. It isn't known whether it depends on the position the phone booted in, as the [outer screen](#the-outer-screen-and-booting-closed) does: the dumps are from a phone that booted closed.
-
-One thing wasn't ruled out. The camera list is put together when the phone starts, and FoldFix runs from startup too, asking for state 3 as soon as its service is up. The camera HAL and the camera service are started before the system process that runs apps, so an effect of FoldFix on that list is unlikely, but the phone hasn't been restarted with FoldFix switched off to check.
+The fault is older than FoldFix. On the test phone the front camera stopped working long before FoldFix was installed. Why the outer screen's camera is missing can't be told from the outside. It sits in the same half as the outer screen, behind the hinge, so the damage that silenced the hinge sensor is the likely cause. It isn't known whether it depends on the position the phone booted in, as the [outer screen](#the-outer-screen-and-booting-closed) does: the dumps are from a phone that booted closed.
 
 An app can only use cameras that the camera service lists. So on such a phone no app gets a front camera, open or closed. Pixel Camera logs `Can't find camera ID with facing FRONT` and opens camera 0, also when it is started with a request for the front camera. In state 2 it shows its button for switching cameras, and a tap on it only brings up Camera's own message: "Something went wrong. Since restarting your phone didn't help, the problem could be due to issues with your camera's hardware or software". The same list is what video-call apps get. Face unlock needs a front camera too; no face was set up on the test phone, so that wasn't tried.
 
-A phone whose only fault is the hinge sensor may still have both front cameras. In state 3 the camera software is told "folded", so the outer screen's camera should be the one apps get on the closed phone. That hasn't been tested.
+This is one phone. A phone whose only fault is the hinge sensor may still have both front cameras. In state 3 the camera software is told "folded", so the outer screen's camera should be the one apps get on the closed phone. That hasn't been tested.
 
 #### Pixel Camera's selfie button
 
@@ -421,16 +426,16 @@ Camera ends the active request, whoever made it. FoldFix sees a closed phone wit
 | Outcome | Result | How often |
 | --- | --- | --- |
 | FoldFix's request is accepted and its dialog confirmed | Back in state 3, FoldFix's request. Outer screen dark for 1.1 to 2.5 s | 40 of 64 taps before the change described below, 19 of 24 after |
-| FoldFix's request is refused (FoldFix isn't counted as the top app at that moment) | Camera's own request follows: state 5, which FoldFix takes over. Outer screen dark for 0.9 to 1.5 s. The folded inner screen is then lit whenever the outer one is, until the phone is opened | 22 of 64, then 5 of 24. The change has no bearing on this outcome: together, 27 of 88 |
-| FoldFix's request is accepted, but Camera's becomes active before the dialog is confirmed | State 5 with FoldFix's "Switch screens?" dialog on the outer screen. FoldFix now confirms it, and the phone is back in state 3. In the test with the adb shell's request described below, that took 0.3 to 0.9 s from the other request becoming active | 2 of 64. The dialog stayed until it was tapped |
+| FoldFix's request is refused (FoldFix isn't counted as the top app at that moment) | Camera's own request follows: state 5, which FoldFix takes over. Outer screen dark for about a second. The folded inner screen is then lit whenever the outer one is, until the phone is opened | 22 of 64, then 5 of 24. The change has no bearing on this outcome: together, 27 of 88. In the taps counted for later changes it was rarer: 5 of 97 |
+| FoldFix's request is accepted, but Camera's becomes active before the dialog is confirmed | State 5 with FoldFix's "Switch screens?" dialog on the outer screen. FoldFix now confirms it, and the phone is back in state 3. In the test with the adb shell's request described below, that took 0.3 to 0.9 s from the other request becoming active | 2 of 64, where the dialog stayed until it was tapped. Since the change, 1 of 12 taps in a later count: confirmed after 0.98 s |
 
-The third outcome is the only one FoldFix made worse than leaving things alone, and the one that was changed. It didn't turn up in the 24 taps after the change, so it was tested by letting a state-5 request from the adb shell overtake FoldFix's: confirmed in 5 of 5 runs.
+The third outcome is the only one FoldFix made worse than leaving things alone, and the one that was changed. It didn't turn up in the 24 taps after the change, so it was tested by letting a state-5 request from the adb shell overtake FoldFix's: confirmed in 5 of 5 runs. It has come up once with Camera itself since, and was confirmed there too.
 
 What is left:
 
 - The button can't be made useful on a closed phone. It is Camera's switch for a mode that only makes sense on an open one.
 - The second outcome leaves the phone in state 5 until it is next opened. FoldFix doesn't replace that request, for the reasons given under [Other apps' leftover requests](#other-apps-leftover-requests). Another tap usually ends in state 3 again.
-- FoldFix requesting again costs little. In all 27 taps where its request was refused, Camera's own brought the outer screen back in state 5 about a second after it went dark. FoldFix's request takes about as long when it gets through, and it is what switches the inner screen off again.
+- FoldFix requesting again costs little. In all 27 taps of the first counts where its request was refused, Camera's own brought the outer screen back in state 5 about a second after it went dark. FoldFix's request takes about as long when it gets through, and it is what switches the inner screen off again.
 
 ## Testing and logs
 
@@ -440,15 +445,15 @@ What is left:
 ./test.sh
 ```
 
-The rules that decide which screen is on are in three classes that use nothing of Android's: `Reconciler` (the [reconcile loop](#5-the-reconcile-loop)), `Ownership` ([whose request it is](#6-whose-request-is-it)) and `Stale` (the second look of the [trampoline](#3-the-trampoline-activity) and the [curtain](#pixel-camera-on-screen-when-the-phone-is-opened)). The Android classes read the sensor, the clock and the device state, hand those to the rules, and carry out what the rules say. So the rules can be run on any computer with a JDK, and `test.sh` does that: `javac`, then `java`, with a test runner of a few lines in `tests/`. There is no test library, as there is no other dependency.
+The rules that decide which screen is on are in three classes that use nothing of Android's: `Reconciler` (the [reconcile loop](#5-the-reconcile-loop)), `Ownership` ([whose request it is](#6-whose-request-is-it)) and `Stale` (the second look of the [trampoline](#3-the-trampoline-activity) and the [curtain](#pixel-camera-on-screen-when-the-phone-is-opened)). The Android classes read the sensor, the clock and the device state, hand those to the rules, and carry out what the rules say. So the rules can be run on any computer with a JDK, and `test.sh` does that: `javac`, then `java`, with a small test runner in `tests/`. There is no test library, as there is no other dependency.
 
 What the tests cover:
 
-- **One step of the reconcile loop at a time:** every row of the [table](#5-the-reconcile-loop), the retry schedule, the 3-second windows, and when FoldFix must not act (no hall reading, no backend, device state unknown, outer screen not detected, rear-display mode unavailable). One group runs a step in every combination of what the rules read, about 65,000 of them, and checks what must hold in all: never a request without the outer screen, never a cancel of another app's request by the trampoline, a look for the dialog only where a dialog would be answered.
+- **One step of the reconcile loop at a time:** every row of the [table](#5-the-reconcile-loop), the retry schedule, the 3-second windows, and when FoldFix must not act (no hall reading, no backend, device state unknown, outer screen not detected, rear-display mode unavailable). One group runs a step in every combination of what the rules read, 65,536 of them, and checks what must hold in all: never a request without the outer screen, never a cancel of another app's request by the trampoline, a look for the dialog only where a dialog would be answered.
 - **The bookkeeping:** FoldFix's own request from launch to end, requests it takes over (while closed, on open, and when not yet), the 10 seconds a request may wait for its dialog, and which cancel counts as the one that ended rear-display mode.
 - **Late launches:** when a cancel, a request or the curtain stands down.
 - **Whole sequences,** as they were tried by hand on a phone for earlier changes: closing and opening, another app's request made while open or found while closed, or getting in ahead of FoldFix's own, Pixel Camera on screen when the phone is opened, its selfie button on the closed phone, launches that arrive late, FoldFix restarted. These run on a model of the phone (`tests/app/foldfix/SimPhone.java`), in which the test says when a launch arrives, when the dialog shows and what another app does.
-- **[The history](#the-history):** which lines are kept, in which order, and how their times read. `FoldLog` also writes to Android's log, the one class of Android's that the tested code uses; a few lines in `tests/` stand in for it.
+- **[The history](#the-history):** which lines are kept, in which order, and how their times read. `FoldLog` also writes to Android's log, the one class of Android's that the tested code uses; a small class in `tests/` stands in for it.
 
 A few cases carry the comment `current behaviour, pinned as found`. They record what the code does in a spot where that is open to question, so that a change there shows up. They don't say that it is right.
 
@@ -466,10 +471,10 @@ adb logcat -s FoldFix
 
 ### The history
 
-On an affected phone that log is of little use afterwards. The dead hinge sensor makes the system write thousands of `FoldableDeviceStateProvider` lines per second, and FoldFix's lines are pushed out within a couple of minutes. So FoldFix also keeps its own lines itself. Every log call goes through one class, `FoldLog`, which writes the line to Android's log as before (same tag, same text) and adds it to a history:
+That log is of little use afterwards, because it only reaches back a few minutes at most. On the test phone, the buffer that apps' lines go to held anything from under a minute to about six minutes when it was sampled, depending on how much else was being logged. (The system's own buffer, into which the dead hinge sensor makes Android write about 400 `FoldableDeviceStateProvider` lines per second, held two to three.) So FoldFix also keeps its own lines itself. Every log call goes through one class, `FoldLog`, which writes the line to Android's log as before (same tag, same text) and adds it to a history:
 
-- **The last 500 lines**, each with the wall-clock time to the millisecond and its level (`I`, `W` or `E`). Opening and closing the phone once writes 15 lines, or 23 with [Pixel Camera on screen](#pixel-camera-on-screen-when-the-phone-is-opened) (two more each when [simulated](#driving-it-from-adb)), so that is the last 33 such cycles, or 21 of the long ones. Older lines drop out one by one. Kept in memory, 500 lines take about 50 KB.
-- **In memory only.** No file and no setting: the history starts again when FoldFix's process does (an update, a restart of the phone, Android restarting the app). Each process writes `FoldFix 1.0.3 (4) started` as its first line, so it is plain where the history begins.
+- **The last 500 lines**, each with the wall-clock time to the millisecond and its level (`I`, `W` or `E`). Opening and closing the phone once writes 15 lines, or 23 with [Pixel Camera on screen](#pixel-camera-on-screen-when-the-phone-is-opened) (two more each when [simulated](#driving-it-from-adb)), so that is the last 33 such cycles, or 21 of the long ones. Older lines drop out one by one. Kept in memory, 500 lines take an estimated 50 KB.
+- **In memory only.** No file and no setting: the history starts again when FoldFix's process does (an update, a restart of the phone, Android restarting the app). Each process writes its version as its first line, such as `FoldFix 1.0.3 (4) started`, so it is plain where the history begins.
 - **Only what FoldFix logs:** device states, timings, the view IDs of the dialog's buttons, and the names and messages of exceptions (Android's log gets their stack traces, the history doesn't). Nothing read from the screen is ever logged, and nothing about other apps: FoldFix only knows that rear-display mode went on or off, not through which app. A line longer than 300 characters is cut.
 - **Cheap.** Adding a line takes a lock and stores a time and the text that was logged anyway; times are only formatted when the history is read. It can be called from any thread.
 
@@ -497,11 +502,11 @@ SERVICE app.foldfix/.FoldService 72adec4 pid=2749 user=0
     11-11 02:42:53.834 I status: Closed: outer screen on
 ```
 
-It works on a locked phone, needs the service to be on (otherwise: `No services match`), and like every `dumpsys` it is only open to holders of `DUMP`, in practice the adb shell. `dumpsys` indents the lines, and now and then leaves the indent off one of them. The lines are the ones `adb logcat -s FoldFix` shows; a time can be a millisecond later than there, because the history takes it right after the line was logged.
+It works on a locked phone, needs the service to be on (otherwise: `No services match`), and like every `dumpsys` it is only open to holders of `DUMP`: the adb shell, privileged system apps, and apps it was granted to over adb. `dumpsys` indents the lines, and now and then leaves the indent off one of them. The lines are the ones `adb logcat -s FoldFix` shows; a time can be a millisecond later than there, because the history takes it right after the line was logged.
 
 ### Driving it from adb
 
-The trampoline can be driven from adb for testing. The adb shell holds the `DUMP` permission that protects it; other apps don't.
+The trampoline can be driven from adb for testing. The adb shell holds the `DUMP` permission that protects it ([the trampoline](#3-the-trampoline-activity) says who else does).
 
 ```sh
 adb shell am start -n app.foldfix/.Trampoline --es action request
@@ -509,7 +514,7 @@ adb shell am start -n app.foldfix/.Trampoline --es action cancel
 adb shell am start -n app.foldfix/.Trampoline --es action cancel --ez force true
 ```
 
-The outer-screen guard still applies, and the running service undoes any request of its own that doesn't match the fold position.
+The outer-screen guard still applies, and so do the trampoline's own checks. A `request` is dropped while the service reads the phone as open, and does nothing while rear-display mode is on or a request of FoldFix's is under way.
 
 A plain `cancel` is checked like the service's own (see [the trampoline](#3-the-trampoline-activity)): it only ends a request that is FoldFix's to end, and not while the service reads the phone as closed. FoldFix can't always tell whose the active request is: one it took over from an earlier FoldFix process, or adopted, still counts as its own after another request replaced it without rear-display mode going off (see [Other apps' leftover requests](#other-apps-leftover-requests)), and a plain `cancel` ends that one too. `--ez force true` skips that check and ends whatever request is active, for example another app's, or FoldFix's own on the closed phone. The service never uses it.
 

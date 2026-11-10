@@ -23,15 +23,15 @@ import java.io.PrintWriter;
  *
  * <p>Each request makes SystemUI ask "Switch screens?" on the inner screen, which is folded shut
  * at that moment, so the service answers the dialog itself. Rather than trusting single events,
- * it reconciles hall vs. device state every {@link Reconciler#POLL_MS} until they agree. What it
+ * it reconciles hall vs. device state step by step, as events and its own timers come. What it
  * does at each step is decided by {@link Reconciler}, which holds the rules; this class reads the
  * sensor, finds and taps the dialog, and starts the activities.
  *
- * <p>It never fights other apps: Pixel Camera's rear-screen selfie mode uses the same state and
- * dialog, so the service only answers the dialog of a request it made itself. The requests it
+ * <p>It never fights other apps: Pixel Camera's selfie mode asks for state 5, without a dialog, and
+ * the service only answers a dialog while a request of its own may be waiting. The requests it
  * ends are its own, and any it found active while the phone was closed: that one is a leftover
  * which nothing else would end (see {@link RearDisplay#adopt}). A request another app makes while
- * the phone is open is left alone, with one exception: the first one made within
+ * the phone is open is left alone while nothing of ours waits, except the first one made within
  * {@link Reconciler#REREQUEST_MS} of the service ending a request on open is ended too, once (see
  * {@link Curtain}). That one is Pixel Camera wanting back the mode it was started in.
  *
@@ -223,8 +223,8 @@ public class FoldService extends AccessibilityService implements SensorEventList
     // ---- the dialog ------------------------------------------------------------------------
 
     /**
-     * Root of SystemUI's "Switch screens?" dialog, or null. Only system windows are opened, and
-     * only SystemUI's are searched: other apps' windows are never read.
+     * Root of SystemUI's "Switch screens?" dialog, or null. Only system windows are opened (to
+     * Android, apps' overlays are such: only their package is read), and only SystemUI's searched.
      */
     AccessibilityNodeInfo findDialog() {
         for (AccessibilityWindowInfo w : getWindows()) {

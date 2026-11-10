@@ -35,9 +35,9 @@
             </intent-filter>
         </activity>
 
-        <!-- Invisible: starts or ends rear-display mode, which only the top app may do.
-             Exported only to holders of DUMP, i.e. the adb shell (for testing); apps can't get
-             DUMP unless it is granted over adb. FoldFix itself can always start its own activity. -->
+        <!-- Invisible: starts or ends rear-display mode, which only the top app may do. Exported
+             only to holders of DUMP, for testing: the adb shell and privileged system apps, and
+             any other app only if DUMP is granted to it over adb. FoldFix can always start it. -->
         <activity
             android:name=".Trampoline"
             android:directBootAware="true"

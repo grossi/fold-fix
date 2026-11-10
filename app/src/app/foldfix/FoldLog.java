@@ -10,10 +10,10 @@ import java.util.TimeZone;
  * {@code FoldFix}, and into a short history kept here. The status screen shows the history and
  * copies it for a bug report, and {@code dumpsys} prints it (see {@code FoldService.dump}).
  *
- * <p>The history exists because Android's log doesn't keep FoldFix's lines on the phones FoldFix
- * is for: the dead hinge sensor makes the system log thousands of lines per second, which push
- * everything else out within a couple of minutes. And without a computer the log can't be read
- * at all.
+ * <p>The history exists because Android's log doesn't keep FoldFix's lines for long: on the test
+ * phone its buffer for apps reached back from under one to about six minutes (and the system's,
+ * which the dead hinge sensor fills with about 400 lines per second, two to three). And without
+ * a computer a phone's owner has no ordinary way to read the log.
  *
  * <p>It is kept in memory only: no file, no setting. It starts again with the process, which
  * {@link App} marks with a first line.
@@ -30,7 +30,7 @@ final class FoldLog {
     /**
      * Lines kept. Opening and closing the phone once writes 15 lines, 23 with Pixel Camera on
      * screen (see {@link Curtain}), so this holds the last 33 such cycles, or 21 of the long
-     * ones. In memory that is about 50 KB.
+     * ones. In memory that is an estimated 50 KB.
      */
     static final int CAPACITY = 500;
     /** Longer lines are cut, so that an exception's message can't make the history large. */

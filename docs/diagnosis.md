@@ -27,10 +27,10 @@ Exact numbers (sensor handles, line numbers in stack traces, display mode IDs) v
 ## 1. Sensors: `dumpsys sensorservice`
 
 ```sh
-adb shell "dumpsys sensorservice | grep -E 'Hinge Angle|Hall Effect'"
+adb shell "dumpsys sensorservice | grep -E '(Hinge Angle|Hall Effect).*(type:|: last|connections=)'"
 ```
 
-Fold and unfold the phone a few times, then run it again.
+Fold and unfold the phone a few times, then run it again. (The longer pattern leaves out the many lines that only say which apps listened to the two sensors lately.)
 
 **Affected phone** (both sensors are listed, but only the hall sensor has an event history):
 
@@ -45,12 +45,12 @@ DRV5032 Hall Effect Sensor (wake-up) (handle=0x0101001f, connections=1)
 What to look for:
 
 - `DRV5032 Hall Effect Sensor (wake-up): last N events` is present. The hall sensor works.
-- There is **no** `Hinge Angle (wake-up): last N events` line, even though the system is listening to it (`connections=3`). The hinge sensor has never reported since boot.
+- There is **no** `Hinge Angle (wake-up): last N events` line, even though the system is listening to it (`connections=` is above 0; the number varies). The hinge sensor has never reported since boot.
 
 To see the hall sensor's values:
 
 ```sh
-adb shell "dumpsys sensorservice | grep -A 4 'Hall Effect Sensor (wake-up): last'"
+adb shell "dumpsys sensorservice | grep -A 10 'Hall Effect Sensor (wake-up): last'"
 ```
 
 ```text
@@ -58,9 +58,10 @@ DRV5032 Hall Effect Sensor (wake-up): last 10 events
 	 1 (ts=12023.008838280, wall=22:05:58.778) 1.00, 0.00, 0.00, ...
 	 2 (ts=12031.720187701, wall=22:06:07.491) 0.00, 0.00, 0.00, ...
 	 3 (ts=12034.108693904, wall=22:06:09.884) 1.00, 0.00, 0.00, ...
+	...
 ```
 
-The first value is `1.00` when the phone is closed and `0.00` when it's open. New events should appear each time you fold or unfold.
+The first value is `1.00` when the phone is closed and `0.00` when it's open. The newest event is the last one, and a new one should appear each time you fold or unfold. An event is also listed whenever an app starts listening to the sensor, so the same value can come several times in a row.
 
 **Healthy phone:** there is also a `Hinge Angle (wake-up): last N events` block, and its first value is the hinge angle in degrees (around 180 when flat open, near 0 when closed).
 
@@ -71,16 +72,16 @@ The first value is `1.00` when the phone is closed and `0.00` when it's open. Ne
 `FoldableDeviceStateProvider` is the part of Android that turns the hinge angle into "open", "half-open" or "closed".
 
 ```sh
-adb logcat | grep FoldableDeviceStateProvider
+adb logcat -s FoldableDeviceStateProvider
 ```
 
 Press Ctrl+C to stop. To dump what's already in the log and exit instead:
 
 ```sh
-adb shell "logcat -d | grep -m 10 FoldableDeviceStateProvider"
+adb shell "logcat -d -s FoldableDeviceStateProvider | head -n 30"
 ```
 
-**Affected phone** (repeats many times per second):
+**Affected phone** (repeats many times per second; shortened here, the stack trace is some twenty lines long):
 
 ```text
 W FoldableDeviceStateProvider: Unable to check current state = 0
@@ -88,6 +89,7 @@ W FoldableDeviceStateProvider: java.lang.IllegalStateException: Have not receive
 W FoldableDeviceStateProvider: 	at com.android.server.policy.FoldableDeviceStateProvider.getSensorValue(FoldableDeviceStateProvider.java:344)
 W FoldableDeviceStateProvider: 	at com.android.server.policy.FoldableDeviceStateProvider.getHingeAngle(FoldableDeviceStateProvider.java:548)
 W FoldableDeviceStateProvider: 	at com.android.server.policy.BookStyleClosedStatePredicate.test(BookStyleClosedStatePredicate.java:135)
+...
 I FoldableDeviceStateProvider: Sensor values:
 I FoldableDeviceStateProvider: Hinge Angle (wake-up) : null
 ```
@@ -96,7 +98,7 @@ Android tries to work out the fold state, asks for the hinge angle, gets nothing
 
 **Healthy phone:** none of these warnings.
 
-These messages are so frequent that they push everything else out of the default log buffer within a minute or so. If you need longer log history, enlarge the buffer (resets at reboot):
+With or without these messages, Android's log only reaches back a few minutes at most. On the test phone it held two to three minutes of these messages, which came at about 400 lines per second, and anything from under a minute to about six minutes of what apps logged, depending on how busy the phone was. If you need a longer history, enlarge the buffers (this lasts until the next reboot):
 
 ```sh
 adb logcat -G 4M
@@ -207,13 +209,15 @@ adb shell cmd device_state base-state 0
 
 The outer screen should turn on and show what the inner screen was showing. This tells you the screens and the rest of Android work fine and only the sensor input is missing.
 
+This check is for a phone without FoldFix, or with FoldFix's service turned off. With the service on, the forced state ends FoldFix's request, FoldFix asks for rear-display mode again, and Android answers on the outer screen with an "Unfold phone" dialog. It has a Cancel button only, so FoldFix can't confirm it. After the reset below, the dialog goes away and FoldFix has the outer screen back.
+
 Undo it (otherwise Android treats the phone as closed even when you open it):
 
 ```sh
 adb shell cmd device_state base-state reset
 ```
 
-The override doesn't survive a reboot.
+The forced state doesn't survive a reboot.
 
 ## What the results mean
 
@@ -240,6 +244,6 @@ adb shell dumpsys activity service app.foldfix/.FoldService > foldfix.txt
 adb logcat -d                                         > logcat.txt
 ```
 
-`foldfix.txt` holds only FoldFix's own history: which build is installed, what it is doing, and the last 500 lines of what it detected and what it did, with their times. It's the same history that the **Copy** button under **Recent activity** on FoldFix's status screen copies, so no computer is needed for it. FoldFix keeps it in memory, so it goes back further than Android's log, which on an affected phone only holds FoldFix's lines for a couple of minutes; it starts again when FoldFix restarts. The command needs FoldFix's accessibility service to be on (otherwise it prints `No services match`). It's usually the most useful file for a FoldFix bug report.
+`foldfix.txt` holds only FoldFix's own history: which build is installed, what it is doing, and the last 500 lines of what it detected and what it did, with their times. It's the same history that the **Copy** button under **Recent activity** on FoldFix's status screen copies, so no computer is needed for it. FoldFix keeps it in memory, so it usually goes back further than Android's log, which only holds FoldFix's lines for a few minutes at most; it starts again when FoldFix restarts. The command needs FoldFix's accessibility service to be on (otherwise it prints `No services match`). It's usually the most useful file for a FoldFix bug report.
 
 Full logs and dumps can contain personal information, such as account names, Wi-Fi network names, device identifiers, app names and notification text. Before attaching them to a public issue, trim them to the relevant lines or check them carefully.

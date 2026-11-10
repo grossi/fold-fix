@@ -273,7 +273,7 @@ final class ReconcilerTest {
 
         t.test("requests that never get through: when they are sent", () -> {
             FakePhone p = new FakePhone();
-            // current behaviour, pinned as found: the spacing is 2.2 s and 33 s where the docs say
+            // current behaviour, pinned as found: the spacing is 2.2 s and 33 s, the constants are
             // 2 s and 30 s. 2.2 s, because a retry needs more than 2 s since the last launch and the
             // loop looks every 200 ms then: at 2000 ms it is too early. 33 s, because the 30 s timer
             // is only set once the 3 s of looking every 200 ms are over.
