@@ -25,7 +25,7 @@ import java.util.List;
 final class SimPhone implements Reconciler.Rear, Reconciler.Phone {
     static final boolean CLOSED = true, OPEN = false;
     /** Device states, as on the Pixel Fold. */
-    static final int OPENED = 2, REAR = 3, REAR_OUTER_DEFAULT = 5;
+    static final int STATE_CLOSED = 0, OPENED = 2, REAR = 3, REAR_OUTER_DEFAULT = 5;
     static final String NOBODY = "nobody", FOLDFIX = "FoldFix", OTHER = "another app";
 
     // ---- the system ---------------------------------------------------------------------
@@ -146,6 +146,12 @@ final class SimPhone implements Reconciler.Rear, Reconciler.Phone {
         return true;
     }
 
+    /** {@code adb shell am start -n app.foldfix/.Trampoline --es action request}. */
+    void adbRequest() {
+        resumeTrampoline(Reconciler.REQUEST, false);
+        settle();
+    }
+
     /** {@code adb shell am start -n app.foldfix/.Trampoline --es action cancel [--ez force true]}. */
     void adbCancel(boolean force) {
         resumeTrampoline(Reconciler.CANCEL, force);
@@ -213,6 +219,44 @@ final class SimPhone implements Reconciler.Rear, Reconciler.Phone {
     /** The status screen's "Switch to the inner screen" button (RearDisplay.cancelForUser). */
     void userSwitchesToInner() {
         cancel(true);
+        settle();
+    }
+
+    /**
+     * Android's own state becomes CLOSED: a hinge sensor that works, or
+     * {@code cmd device_state base-state 0}. The system ends the active request, whoever made it.
+     * A request that is waiting for its dialog stays until {@link #systemDropsWaitingRequest} or
+     * {@link #dialogShows}: on the phone either happened.
+     */
+    void androidCloses() {
+        String was = holder;
+        int gen = activeGen;
+        holder = NOBODY;
+        if (was.equals(FOLDFIX)) reports.add(() -> own.requestEnded(gen, real));
+        reports.add(() -> systemState(STATE_CLOSED));
+        settle();
+    }
+
+    /**
+     * Android's state goes back to OPENED: the phone was opened, or the base state was reset. A
+     * request of FoldFix's that is still waiting stays as it is. (On the phone one whose "Unfold
+     * phone" dialog nobody answered went through by itself then; FoldFix now cancels that dialog.)
+     */
+    void androidOpens() {
+        reports.add(() -> systemState(OPENED));
+        settle();
+    }
+
+    /**
+     * System UI drops FoldFix's waiting request by itself, with its dialog if that is up. It does
+     * when Android's state becomes CLOSED while "Switch screens?" is showing.
+     */
+    void systemDropsWaitingRequest() {
+        if (waitingGen == 0) throw new IllegalStateException("no request of FoldFix's is waiting for its dialog");
+        int gen = waitingGen;
+        waitingGen = 0;
+        dialog = false;
+        reports.add(() -> own.requestEnded(gen, real));
         settle();
     }
 
@@ -284,6 +328,10 @@ final class SimPhone implements Reconciler.Rear, Reconciler.Phone {
     public boolean tapDialog(boolean confirm) {
         dialogLooks++;
         if (!dialog) return false;
+        if (confirm && state == STATE_CLOSED) {  // there the dialog reads "Unfold phone": Cancel only
+            log.add("dialog up but no Confirm yet");
+            return true;
+        }
         log.add("clicked " + (confirm ? "Confirm" : "Cancel"));
         dialog = false;
         int gen = waitingGen;
@@ -338,11 +386,14 @@ final class SimPhone implements Reconciler.Rear, Reconciler.Phone {
             } else {
                 log.add("dropping stale cancel: " + stale);
             }
-        } else if (Stale.isRequestStale(hallClosed())) {
-            log.add("phone is open, dropping stale request");
-            own.dropPendingMark();
         } else {
-            request();
+            String stale = Stale.whyRequestStale(hallClosed(), isStateClosed());
+            if (stale == null) {
+                request();
+            } else {
+                log.add(stale + ", dropping stale request");
+                own.dropPendingMark();
+            }
         }
     }
 
@@ -352,6 +403,7 @@ final class SimPhone implements Reconciler.Rear, Reconciler.Phone {
     @Override public boolean isKnown() { return known; }
     @Override public boolean isRearActive() { return state == REAR || state == REAR_OUTER_DEFAULT; }
     @Override public boolean isAvailable() { return available; }
+    @Override public boolean isStateClosed() { return state == STATE_CLOSED; }
     @Override public boolean hasOwnRequest() { return own.hasOwnRequest(); }
     @Override public boolean isSessionLive() { return own.isSessionLive(up); }
     @Override public boolean isSessionWaiting() { return own.isSessionWaiting(up); }

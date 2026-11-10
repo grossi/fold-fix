@@ -19,6 +19,7 @@ final class ReconcilerTest {
 
     static void tests(Suite t) {
         table(t);
+        stateClosed(t);
         followUp(t);
         timing(t);
         guards(t);
@@ -143,6 +144,121 @@ final class ReconcilerTest {
             p.pass(1);
             same("3000 ms after it", "status: Open: inner screen on", p.step(OPEN));
             same("looks for the dialog", 0, p.dialogLooks);
+        });
+    }
+
+    /** The rows of that table for Android's own CLOSED state, which a dead hinge sensor never reports. */
+    private static void stateClosed(Suite t) {
+        t.group("Reconciler, Android's own CLOSED state");
+        String status = "status: Closed: Android has switched to the outer screen by itself";
+
+        t.test("hall closed: no request, no look for a dialog, no timer", () -> {
+            FakePhone p = new FakePhone();
+            p.stateClosed = true;
+            same("step", status, p.step(CLOSED));
+            same("looks for the dialog", 0, p.dialogLooks);
+            same("landscape fix", false, p.landscapeFix);
+            same("launches in ten minutes", Arrays.asList(), p.launchTimes(CLOSED, 600_000));
+        });
+
+        t.test("hall open: the same", () -> {
+            FakePhone p = new FakePhone();
+            p.stateClosed = true;
+            same("step", status, p.step(OPEN));
+            same("looks for the dialog", 0, p.dialogLooks);
+            same("landscape fix", false, p.landscapeFix);
+        });
+
+        t.test("a dialog that isn't ours is left alone", () -> {
+            FakePhone p = new FakePhone();
+            p.stateClosed = p.dialog = true;
+            same("hall closed", status, p.step(CLOSED));
+            same("hall open", status, p.step(OPEN));
+            same("looks for the dialog", 0, p.dialogLooks);
+        });
+
+        t.test("a request of ours still waiting: Cancel in its dialog when it shows, wait until then", () -> {
+            FakePhone p = new FakePhone();
+            p.stateClosed = p.ours = p.live = p.waiting = true;
+            // No timer: the dialog showing up is an accessibility event.
+            same("dialog not up yet", status, p.step(CLOSED));
+            same("looks for the dialog", 1, p.dialogLooks);
+            p.dialog = true;
+            same("dialog up", lines("tap Cancel", "look again in 2000 ms", status), p.step(CLOSED));
+            same("the same with hall open", lines("tap Cancel", "look again in 2000 ms", status), p.step(OPEN));
+            p.live = p.waiting = false;  // given up on after 10 s: still ours, still only Cancel
+            same("after 10 s", lines("tap Cancel", "look again in 2000 ms", status), p.step(CLOSED));
+        });
+
+        t.test("within 3 s of our last request its dialog is looked for every 200 ms, also once nothing is ours", () -> {
+            FakePhone p = new FakePhone();
+            p.step(CLOSED);  // request launched
+            p.pass(100);
+            p.stateClosed = p.ours = true;
+            same("ours, no dialog yet", lines("look again in 200 ms", status), p.step(CLOSED));
+            p.ours = false;  // the trampoline dropped it, or the system ended it
+            p.pass(2_899);
+            same("2999 ms after the request", lines("look again in 200 ms", status), p.step(CLOSED));
+            p.dialog = true;
+            same("its dialog shows after all", lines("tap Cancel", "look again in 200 ms", status), p.step(CLOSED));
+            p.pass(1);
+            same("3000 ms after it", status, p.step(CLOSED));
+            same("looks for the dialog", 0, p.dialogLooks);
+        });
+
+        t.test("a request is never made, however long ago the last launch was and whatever else holds", () -> {
+            FakePhone p = new FakePhone();
+            p.stateClosed = true;
+            p.outer = p.available = false;  // not looked at: nothing is asked for anyway
+            same("step", status, p.step(CLOSED));
+            p.rules.tries = 5;
+            p.step(CLOSED);
+            same("the retry schedule starts over", 0, p.rules.tries);
+        });
+
+        t.test("leaving CLOSED: FoldFix carries on from the hall reading", () -> {
+            FakePhone p = new FakePhone();
+            p.stateClosed = true;
+            p.step(CLOSED);
+            p.stateClosed = false;  // the base state was reset, on a phone that is shut
+            same("hall closed", lines("launch request (try 1)", "status: Closed: switching to the outer screen",
+                    "look again in 200 ms"), p.step(CLOSED));
+
+            FakePhone q = new FakePhone();
+            q.stateClosed = true;
+            q.step(OPEN);
+            q.stateClosed = false;  // the phone was opened
+            same("hall open", "status: Open: inner screen on", q.step(OPEN));
+        });
+
+        t.test("rear display reported on at the same time (not seen on the phone): as without the CLOSED state", () -> {
+            FakePhone p = new FakePhone();
+            p.stateClosed = p.rear = p.ours = true;
+            same("hall closed", "status: Closed: outer screen on", p.step(CLOSED));
+            yes("hall open", p.step(OPEN).startsWith("launch cancel (try 1)"));
+        });
+
+        t.test("not before the device state is known, and not without a backend", () -> {
+            FakePhone p = new FakePhone();
+            p.stateClosed = true;
+            p.known = false;
+            same("state not known", "", p.step(CLOSED));
+            p.backend = null;
+            same("no backend", "status: No rear-display access: run the one-time adb command", p.step(CLOSED));
+        });
+
+        t.test("an accessibility event leads to a step only while a request of ours may have a dialog", () -> {
+            FakePhone p = new FakePhone();
+            p.stateClosed = true;
+            no("hall closed, nothing of ours", p.rules.dialogMatters(CLOSED));
+            no("hall open, nothing of ours", p.rules.dialogMatters(OPEN));
+            p.ours = true;
+            yes("hall closed, a request of ours", p.rules.dialogMatters(CLOSED));
+            p.ours = false;
+            p.rules.lastRequest = p.uptime - 2_999;
+            yes("hall closed, 2999 ms after our last request", p.rules.dialogMatters(CLOSED));
+            p.pass(1);
+            no("hall closed, 3000 ms after it", p.rules.dialogMatters(CLOSED));
         });
     }
 
@@ -583,10 +699,11 @@ final class ReconcilerTest {
 
     /**
      * Runs one step in every combination of what the rules read (also combinations RearDisplay
-     * never reports), and of the timings that matter.
+     * never reports, such as rear-display mode on in Android's own CLOSED state), and of the
+     * timings that matter.
      */
     private static void everyState(Each each) {
-        for (int bits = 0; bits < 1 << 16; bits++) {
+        for (int bits = 0; bits < 1 << 17; bits++) {
             FakePhone p = new FakePhone();
             State s = new State();
             s.closed = bit(bits, 0);
@@ -610,6 +727,7 @@ final class ReconcilerTest {
                 if (!s.recentLaunch) p.rules.lastLaunch = p.uptime - 10_000;
             }
             p.ending = bit(bits, 15);
+            p.stateClosed = bit(bits, 16);
             s.cancelEnded = bit(bits, 14);
             if (s.cancelEnded) {
                 p.rules.cancelSentAt = p.realtime - 1_500;
@@ -625,7 +743,7 @@ final class ReconcilerTest {
                 throw new Suite.Failure(f.getMessage() + "\nin state: closed=" + s.closed + " known=" + p.known
                         + " backend=" + p.backend + " rear=" + p.rear + " ours=" + p.ours + " live=" + p.live
                         + " waiting=" + p.waiting + " cancelPending=" + p.cancelPending + " ending=" + p.ending
-                        + " available=" + p.available
+                        + " available=" + p.available + " stateClosed=" + p.stateClosed
                         + " outer=" + p.outer + " dialog=" + p.dialog + " recentLaunch=" + s.recentLaunch
                         + " recentRequest=" + s.recentRequest + " manyTries=" + s.manyTries
                         + " cancelEnded=" + s.cancelEnded + "\nit did: " + s.did.replace("\n", "; "));
@@ -644,13 +762,28 @@ final class ReconcilerTest {
         t.test("closed: never a cancel, never the curtain; open: never a request, a confirm or a take-over", () -> everyState((p, s) -> {
             if (s.closed) {
                 no("launch cancel", p.did("launch cancel"));
-                no("tap Cancel", p.did("tap Cancel"));
+                // The one Cancel on a closed phone: our request's dialog in Android's own CLOSED state.
+                if (!p.stateClosed || p.rear) no("tap Cancel", p.did("tap Cancel"));
                 no("curtain", p.did("curtain"));
             } else {
                 no("launch request", p.did("launch request"));
                 no("tap Confirm", p.did("tap Confirm"));
                 no("adopt", p.did("adopt"));
             }
+        }));
+
+        t.test("never a request while Android's own state is CLOSED", () -> everyState((p, s) -> {
+            if (p.stateClosed) no("launch request", p.did("launch request"));
+        }));
+
+        t.test("Android's state CLOSED, rear display off: nothing is launched, confirmed or taken over, whatever the hall reading", () -> everyState((p, s) -> {
+            if (!p.stateClosed || p.rear || p.backend == null || !p.known) return;
+            no("launch", p.did("launch"));
+            no("tap Confirm", p.did("tap Confirm"));
+            no("adopt", p.did("adopt"));
+            no("curtain", p.did("curtain"));
+            yes("says so", p.did("status: Closed: Android has switched to the outer screen by itself"));
+            same("landscape fix", false, p.landscapeFix);
         }));
 
         t.test("never a request without the outer screen, or while rear-display mode is unavailable", () -> everyState((p, s) -> {
@@ -682,7 +815,7 @@ final class ReconcilerTest {
         t.test("the dialog is looked for once at most, and only where a dialog would be answered", () -> everyState((p, s) -> {
             boolean acting = p.backend != null && p.known;
             boolean where = !acting ? false
-                    : !s.closed ? p.ours || s.recentRequest
+                    : !s.closed || (p.stateClosed && !p.rear) ? p.ours || s.recentRequest
                     : p.rear ? p.waiting
                     : p.ours && p.outer && p.available;
             same("looks for the dialog", where ? 1 : 0, p.dialogLooks);

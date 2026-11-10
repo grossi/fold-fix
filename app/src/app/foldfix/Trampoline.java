@@ -49,13 +49,17 @@ public class Trampoline extends Activity {
             } else {
                 FoldLog.i("dropping stale cancel: " + stale + " (" + rd.describeState() + ")");
             }
-        } else if (Stale.isRequestStale(FoldService.hallClosed)) {
-            // Started while closed but only resumed now (e.g. the screen was off) and the phone
-            // has been opened since: a request would just be cancelled again.
-            FoldLog.i("phone is open, dropping stale request");
-            rd.dropPendingMark();
         } else {
-            rd.request(this);
+            // Started while closed but maybe only resumed now (e.g. the screen was off): checked
+            // again that the phone hasn't been opened since, and that Android hasn't switched to
+            // the outer screen by itself (see Stale).
+            String stale = Stale.whyRequestStale(FoldService.hallClosed, rd.isStateClosed());
+            if (stale == null) {
+                rd.request(this);
+            } else {
+                FoldLog.i(stale + ", dropping stale request");
+                rd.dropPendingMark();
+            }
         }
         finish();
         overridePendingTransition(0, 0);

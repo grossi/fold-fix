@@ -29,6 +29,8 @@ final class Reconciler {
         boolean isKnown();
         boolean isRearActive();
         boolean isAvailable();
+        /** Android itself has the phone in its closed state (see {@link RearDisplay#isStateClosed}). */
+        boolean isStateClosed();
         boolean hasOwnRequest();
         boolean isSessionLive();
         boolean isSessionWaiting();
@@ -112,6 +114,25 @@ final class Reconciler {
         boolean ours = rd.hasOwnRequest();
         long now = phone.uptime();
 
+        // Android itself has the phone in its CLOSED state (a hinge sensor that works; a dead one
+        // never gets there). The outer screen is on without any request, and a request would only
+        // get System UI's "Unfold phone" dialog, which has no Confirm button. So nothing is asked
+        // for, whatever the hall sensor says.
+        if (!rear && rd.isStateClosed()) {
+            // Android drops rear-display requests there by itself. One of ours made just before
+            // can still be waiting for its dialog, which then shows on the outer screen. As on an
+            // open phone, Cancel is the only way to drop it, and it is looked for in the same cases.
+            boolean recent = now - lastRequest < DIALOG_WAIT_MS;
+            if (ours || recent) {
+                boolean up = phone.tapDialog(false);
+                if (recent) phone.lookAgainIn(POLL_MS);
+                else if (up) phone.lookAgainIn(RETRY_MS);
+            }
+            tries = 0;
+            phone.setStatus("Closed: Android has switched to the outer screen by itself");
+            return;  // the state changing runs this again
+        }
+
         if (closed) {
             if (rear) {  // already on the outer screen, whoever asked for it
                 // Our own request can still be waiting for its dialog: another app's got in first
@@ -191,7 +212,10 @@ final class Reconciler {
     boolean dialogMatters(Boolean closed) {
         if (closed == null || !rd.isKnown()) return false;
         boolean recent = phone.uptime() - lastRequest < DIALOG_WAIT_MS;
-        return closed ? !rd.isRearActive() || rd.isSessionWaiting() : rd.hasOwnRequest() || recent;
+        boolean rear = rd.isRearActive();
+        // In Android's own CLOSED state a request of ours is one to drop, as on an open phone.
+        if (!closed || (!rear && rd.isStateClosed())) return rd.hasOwnRequest() || recent;
+        return !rear || rd.isSessionWaiting();
     }
 
     /**

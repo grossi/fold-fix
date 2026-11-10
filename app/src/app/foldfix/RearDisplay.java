@@ -3,6 +3,7 @@ package app.foldfix;
 import android.app.Activity;
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.content.res.Resources;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
@@ -11,6 +12,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executor;
@@ -40,6 +42,8 @@ import java.util.regex.Pattern;
  * <li>An active request is cancelled by any caller that is the top app, whoever made it.
  * <li>An active request outlives the process that made it ("sticky") until the device reaches
  *     CLOSED, which a dead hinge sensor never reports.
+ * <li>In CLOSED the outer screen is on without any request, and a new request gets an "Unfold
+ *     phone" dialog that has no Confirm button: FoldFix makes none there ({@link #isStateClosed}).
  * </ul>
  *
  * <p>So an active request only ends when someone cancels it. FoldFix does that for its own
@@ -78,12 +82,17 @@ final class RearDisplay implements Reconciler.Rear {
     private Object area;           // androidx.window.extensions.area.WindowAreaComponent
     private Class<?> extConsumer;  // androidx.window.extensions.core.util.function.Consumer
     private volatile int extStatus = -1;
+    /** The device state's identifier as of the last status callback, -1 if it couldn't be read. */
+    private volatile int extState = -1;
 
     // Hidden-API backend.
     private final Object dsm;      // android.hardware.devicestate.DeviceStateManager
     private Boolean hiddenApi;     // null = not checked yet
     private boolean hiddenWatched;
     private volatile int hiddenState = -1;
+
+    /** The device states Android itself counts as folded: on the Pixel Fold, CLOSED (0) alone. */
+    private final int[] foldedStates = readFoldedStates();
 
     /**
      * Whose request it is, and how far this process's own has got. What it calls ours is saved,
@@ -164,6 +173,43 @@ final class RearDisplay implements Reconciler.Rear {
         return area == null || extStatus != STATUS_UNAVAILABLE;
     }
 
+    /**
+     * Whether Android itself has the phone in a folded state (CLOSED on the Pixel Fold): it has
+     * then switched to the outer screen by itself, and FoldFix has nothing to ask for. A phone
+     * with a dead hinge sensor never gets there; one that works is there whenever it is shut.
+     *
+     * <p>Which states are folded is Android's own list ({@code config_foldedDeviceStates}), not a
+     * number written here. The state comes from the hidden API's callback, or, with the
+     * extension, from a private field of the library (its stable status reads "available" in
+     * CLOSED as in OPENED). Whatever can't be read counts as not closed, and FoldFix then behaves
+     * as if this check weren't there: a wrong "closed" would leave a phone with a dead sensor
+     * without its outer screen.
+     */
+    @Override
+    public boolean isStateClosed() {
+        int state = area != null ? extState : hiddenState;
+        for (int folded : foldedStates) {
+            if (state == folded) return true;
+        }
+        return false;
+    }
+
+    /** That list, for the log. */
+    String describeFoldedStates() {
+        return Arrays.toString(foldedStates);
+    }
+
+    /** {@code config_foldedDeviceStates}, a framework setting; empty if Android doesn't have it. */
+    private static int[] readFoldedStates() {
+        try {
+            Resources r = Resources.getSystem();
+            int id = r.getIdentifier("config_foldedDeviceStates", "array", "android");
+            return id == 0 ? new int[0] : r.getIntArray(id);
+        } catch (RuntimeException e) {
+            return new int[0];
+        }
+    }
+
     /** Whether the active or pending rear-display request (if any) is FoldFix's to end. */
     @Override
     public boolean hasOwnRequest() {
@@ -225,7 +271,7 @@ final class RearDisplay implements Reconciler.Rear {
     /** Human-readable device state, best effort (for the status screen and logs). */
     String describeState() {
         if (area != null) {
-            String id = extensionDeviceState();
+            String id = describe(extensionState());
             String mode = extStatus < 0 ? "unknown" : isRearActive() ? "rear display on" : "rear display off";
             return id != null ? id + " (" + mode + ")" : mode;
         }
@@ -405,7 +451,14 @@ final class RearDisplay implements Reconciler.Rear {
     }
 
     private void onExtensionStatus(int s) {
-        if (s != extStatus) FoldLog.i("rear display status " + s + ", state " + extensionDeviceState());
+        // The library calls this for every change of the device state, also when the status stays
+        // the same, as it does between OPENED and CLOSED.
+        Matcher state = extensionState();
+        boolean wasClosed = isStateClosed();
+        extState = state != null ? Integer.parseInt(state.group(1)) : -1;
+        if (s != extStatus || wasClosed != isStateClosed()) {
+            FoldLog.i("rear display status " + s + ", state " + describe(state));
+        }
         extStatus = s;
         onStateChanged();
     }
@@ -440,18 +493,27 @@ final class RearDisplay implements Reconciler.Rear {
                 });
     }
 
-    private static final Pattern STATE_ID = Pattern.compile("identifier=(\\d+), name='([^']*)'");
+    private static final Pattern STATE_ID = Pattern.compile("identifier=(\\d{1,9}), name='([^']*)'");
 
-    /** The extension's view of the device state, e.g. "3 REAR_DISPLAY_STATE"; diagnostics only. */
-    private String extensionDeviceState() {
+    /**
+     * The extension's view of the device state, matched as identifier and name, or null. It is a
+     * private field of a system library, read through its text: good for diagnostics, and for
+     * {@link #isStateClosed}, where a failure only means that CLOSED isn't recognised.
+     */
+    private Matcher extensionState() {
         try {
             Field f = area.getClass().getDeclaredField("mCurrentDeviceState");
             f.setAccessible(true);
             Matcher m = STATE_ID.matcher(String.valueOf(f.get(area)));
-            return m.find() ? m.group(1) + " " + m.group(2) : null;
+            return m.find() ? m : null;
         } catch (Throwable t) {
             return null;
         }
+    }
+
+    /** For example "3 REAR_DISPLAY_STATE". */
+    private static String describe(Matcher state) {
+        return state != null ? state.group(1) + " " + state.group(2) : null;
     }
 
     // ---- hidden DeviceStateManager backend ----------------------------------------------

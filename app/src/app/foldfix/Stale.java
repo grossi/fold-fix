@@ -27,11 +27,14 @@ final class Stale {
     }
 
     /**
-     * Whether a request shouldn't be made after all: the phone has been opened since, and the
-     * request would just be cancelled again.
+     * Why a request shouldn't be made after all, or null. The phone has been opened since, and the
+     * request would just be cancelled again. Or Android has reached its own closed state since
+     * ({@link RearDisplay#isStateClosed}), where the outer screen is on already and a request only
+     * gets a dialog that can't be confirmed.
      */
-    static boolean isRequestStale(Boolean hallClosed) {
-        return Boolean.FALSE.equals(hallClosed);
+    static String whyRequestStale(Boolean hallClosed, boolean stateClosed) {
+        return Boolean.FALSE.equals(hallClosed) ? "phone is open"
+                : stateClosed ? "Android's device state is closed" : null;
     }
 
     /**

@@ -14,6 +14,8 @@ final class FakePhone implements Reconciler.Rear, Reconciler.Phone {
     String backend = "window extensions";
     boolean known = true, available = true, outer = true;
     boolean rear, ours, live, waiting, cancelPending, dialog;
+    /** Android's own device state is CLOSED (see RearDisplay.isStateClosed). */
+    boolean stateClosed;
     /** Taking a request over has to wait: one of ours has just ended (see RearDisplay.adopt). */
     boolean ending;
     long endingCancelAt;
@@ -69,6 +71,7 @@ final class FakePhone implements Reconciler.Rear, Reconciler.Phone {
     @Override public boolean isKnown() { return known; }
     @Override public boolean isRearActive() { return rear; }
     @Override public boolean isAvailable() { return available; }
+    @Override public boolean isStateClosed() { return stateClosed; }
     @Override public boolean hasOwnRequest() { return ours; }
     @Override public boolean isSessionLive() { return live; }
     @Override public boolean isSessionWaiting() { return waiting; }

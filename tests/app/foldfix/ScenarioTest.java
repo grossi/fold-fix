@@ -8,6 +8,7 @@ import static app.foldfix.SimPhone.OPENED;
 import static app.foldfix.SimPhone.OTHER;
 import static app.foldfix.SimPhone.REAR;
 import static app.foldfix.SimPhone.REAR_OUTER_DEFAULT;
+import static app.foldfix.SimPhone.STATE_CLOSED;
 import static app.foldfix.Suite.lines;
 import static app.foldfix.Suite.no;
 import static app.foldfix.Suite.same;
@@ -26,6 +27,7 @@ final class ScenarioTest {
         camera(t);
         lateLaunches(t);
         blocked(t);
+        stateClosed(t);
         restarts(t);
     }
 
@@ -928,6 +930,163 @@ final class ScenarioTest {
             p.otherAppEnds();
             same("logged", "", p.took());
             same("status", null, p.status);
+        });
+    }
+
+    /**
+     * Android reaching CLOSED by itself: a hinge sensor that works. On the test phone the state
+     * was forced from a computer ({@code cmd device_state base-state 0}, then {@code reset}).
+     */
+    private static void stateClosed(Suite t) {
+        t.group("Scenarios, Android's own CLOSED state");
+        String status = "Closed: Android has switched to the outer screen by itself";
+
+        t.test("reached while FoldFix's request is active: the system ends it, FoldFix asks for nothing", () -> {
+            SimPhone p = SimPhone.closedOnOuter();
+            int looks = p.dialogLooks;
+            p.androidCloses();
+            same("on CLOSED", "status: " + status, p.took());
+            ends(p, STATE_CLOSED, NOBODY, false);
+            same("landscape fix", false, p.landscapeFix);
+            p.after(600_000);
+            same("ten quiet minutes", "", p.took());
+            yes("nothing scheduled", p.nothingScheduled());
+            same("looks for the dialog since", looks, p.dialogLooks);
+        });
+
+        t.test("left again with the phone still shut (the base state was reset): FoldFix requests as usual", () -> {
+            SimPhone p = SimPhone.closedOnOuter();
+            p.androidCloses();
+            p.after(8_000);
+            p.took();
+            p.androidOpens();
+            same("on OPENED", lines("request rear display (try 1)", "status: Closed: switching to the outer screen"),
+                    p.took());
+            p.trampoline();
+            p.dialogShows();
+            same("the request", lines("rear display requested", "clicked Confirm", "status: Closed: outer screen on"),
+                    p.took());
+            ends(p, REAR, FOLDFIX, true);
+        });
+
+        t.test("a phone whose hinge sensor works, closed and opened: no request, no cancel", () -> {
+            SimPhone p = new SimPhone();
+            p.hall(OPEN);
+            p.took();
+            p.androidCloses();  // the hinge sensor first
+            p.hall(CLOSED);
+            same("closing", lines("status: " + status, "hall closed"), p.took());
+            p.after(60_000);
+            p.hall(OPEN);
+            p.androidOpens();
+            same("opening", lines("hall open", "status: Open: inner screen on"), p.took());
+            ends(p, OPENED, NOBODY, false);
+            same("looks for the dialog", 0, p.dialogLooks);
+        });
+
+        t.test("reached before the request arrives: the trampoline drops it", () -> {
+            SimPhone p = new SimPhone();
+            p.hall(CLOSED);  // the hall sensor first: the request is launched
+            p.took();
+            p.androidCloses();
+            same("on CLOSED", "status: " + status, p.took());
+            p.trampoline();
+            same("the request arrives", "Android's device state is closed, dropping stale request", p.took());
+            ends(p, STATE_CLOSED, NOBODY, false);
+            p.after(600_000);
+            same("ten quiet minutes", "", p.took());
+            yes("nothing scheduled", p.nothingScheduled());
+        });
+
+        t.test("reached while the request waits for its dialog, System UI drops it: nothing left behind", () -> {
+            SimPhone p = new SimPhone();
+            p.hall(CLOSED);
+            p.trampoline();
+            p.took();
+            p.after(40);
+            p.androidCloses();
+            same("on CLOSED", "status: " + status, p.took());
+            yes("still ours, until it is dropped", p.own.hasOwnRequest());
+            p.after(120);
+            p.systemDropsWaitingRequest();
+            ends(p, STATE_CLOSED, NOBODY, false);
+            p.after(600_000);
+            same("nothing more", "", p.took());
+            yes("nothing scheduled", p.nothingScheduled());
+        });
+
+        t.test("reached while the request waits, and its dialog shows there (\"Unfold phone\"): Cancel is tapped", () -> {
+            SimPhone p = new SimPhone();
+            p.hall(CLOSED);
+            p.trampoline();
+            p.took();
+            p.after(40);
+            p.androidCloses();
+            p.after(300);
+            p.dialogShows();
+            same("the dialog shows", lines("status: " + status, "clicked Cancel"), p.took());
+            no("dialog left on screen", p.dialog);
+            ends(p, STATE_CLOSED, NOBODY, false);
+            p.after(600_000);
+            same("nothing more", "", p.took());
+            yes("nothing scheduled", p.nothingScheduled());
+        });
+
+        t.test("that dialog showing only after 3 s: still cancelled, the request is ours until then", () -> {
+            SimPhone p = new SimPhone();
+            p.hall(CLOSED);
+            p.trampoline();
+            p.androidCloses();
+            p.after(15_000);
+            p.took();
+            yes("nothing scheduled while waiting", p.nothingScheduled());
+            p.dialogShows();
+            same("the dialog shows", "clicked Cancel", p.took());
+            ends(p, STATE_CLOSED, NOBODY, false);
+        });
+
+        t.test("reached with another app's request taken over: the system ends that too", () -> {
+            SimPhone p = new SimPhone();
+            p.hall(OPEN);
+            p.otherAppRequests(REAR_OUTER_DEFAULT);
+            p.hall(CLOSED);
+            p.took();
+            p.androidCloses();
+            same("on CLOSED", lines("earlier or adopted request is gone", "status: " + status), p.took());
+            ends(p, STATE_CLOSED, NOBODY, false);
+        });
+
+        t.test("the hall sensor reading open in CLOSED: still nothing, and the open phone's rules once it is left", () -> {
+            SimPhone p = SimPhone.closedOnOuter();
+            p.androidCloses();
+            p.took();
+            p.hall(OPEN);
+            same("hall open", "hall open", p.took());
+            same("status", status, p.status);
+            p.androidOpens();
+            same("on OPENED", "status: Open: inner screen on", p.took());
+            ends(p, OPENED, NOBODY, false);
+            same("trampolines launched", 0, p.launchesUnderWay());
+        });
+
+        t.test("adb's request in CLOSED: dropped", () -> {
+            SimPhone p = SimPhone.closedOnOuter();
+            p.androidCloses();
+            p.took();
+            p.adbRequest();
+            same("the request arrives", "Android's device state is closed, dropping stale request", p.took());
+            ends(p, STATE_CLOSED, NOBODY, false);
+        });
+
+        t.test("FoldFix restarted in CLOSED: the saved flag is cleared, nothing is asked for", () -> {
+            SimPhone old = SimPhone.closedOnOuter();
+            old.state = STATE_CLOSED;  // reached while FoldFix wasn't running: the system ended the request
+            old.holder = NOBODY;
+            SimPhone p = old.restarted();
+            p.hall(CLOSED);
+            same("after the restart", lines("earlier or adopted request is gone", "hall closed", "status: " + status),
+                    p.took());
+            ends(p, STATE_CLOSED, NOBODY, false);
         });
     }
 

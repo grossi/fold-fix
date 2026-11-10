@@ -27,6 +27,9 @@ import java.io.PrintWriter;
  * does at each step is decided by {@link Reconciler}, which holds the rules; this class reads the
  * sensor, finds and taps the dialog, and starts the activities.
  *
+ * <p>On a phone whose hinge sensor works, Android reaches its CLOSED state by itself and has the
+ * outer screen on there. While that lasts the service asks for nothing.
+ *
  * <p>It never fights other apps: Pixel Camera's selfie mode asks for state 5, without a dialog, and
  * the service only answers a dialog while a request of its own may be waiting. The requests it
  * ends are its own, and any it found active while the phone was closed: that one is a leftover
@@ -106,7 +109,8 @@ public class FoldService extends AccessibilityService implements SensorEventList
         // incomplete during one).
         FoldLog.i("outer screen present " + Hardware.outerDisplayPresent(this)
                 + " (built-in displays: " + Hardware.builtInDisplayCount(this) + "), hidden API "
-                + (rd.hasHiddenApi() ? "allowed" : "blocked"));
+                + (rd.hasHiddenApi() ? "allowed" : "blocked") + ", Android's folded states "
+                + rd.describeFoldedStates());
     }
 
     @Override
@@ -225,6 +229,9 @@ public class FoldService extends AccessibilityService implements SensorEventList
     /**
      * Root of SystemUI's "Switch screens?" dialog, or null. Only system windows are opened (to
      * Android, apps' overlays are such: only their package is read), and only SystemUI's searched.
+     * A window says nothing of its owner until it is opened: it has no package, and this dialog's
+     * has no title. In Android's own CLOSED state the dialog reads "Unfold phone" and has no
+     * Confirm button; it is the same dialog, found by the same ID.
      */
     AccessibilityNodeInfo findDialog() {
         for (AccessibilityWindowInfo w : getWindows()) {

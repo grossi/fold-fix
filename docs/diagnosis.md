@@ -209,7 +209,7 @@ adb shell cmd device_state base-state 0
 
 The outer screen should turn on and show what the inner screen was showing. This tells you the screens and the rest of Android work fine and only the sensor input is missing.
 
-This check is for a phone without FoldFix, or with FoldFix's service turned off. With the service on, the forced state ends FoldFix's request, FoldFix asks for rear-display mode again, and Android answers on the outer screen with an "Unfold phone" dialog. It has a Cancel button only, so FoldFix can't confirm it. After the reset below, the dialog goes away and FoldFix has the outer screen back.
+This check is meant for a phone without FoldFix, or with FoldFix's service turned off. With the service on there is little to see, because the outer screen is on before you start: the forced state ends FoldFix's request, Android keeps the outer screen on by itself, and FoldFix asks for nothing while the state lasts. Its status reads `Closed: Android has switched to the outer screen by itself`. After the reset below, FoldFix asks for the outer screen again. (The releases up to 1.0.3 asked for it in the forced state too, and Android answered with an "Unfold phone" dialog that stayed on the outer screen until the reset.)
 
 Undo it (otherwise Android treats the phone as closed even when you open it):
 

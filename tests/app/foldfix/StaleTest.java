@@ -11,7 +11,7 @@ import static app.foldfix.Suite.yes;
 final class StaleTest {
     private StaleTest() {}
 
-    private static final boolean FORCE = true, OURS = true, REAR_ON = true;
+    private static final boolean FORCE = true, OURS = true, REAR_ON = true, STATE_CLOSED = true;
 
     static void tests(Suite t) {
         t.group("Stale, the trampoline's cancel");
@@ -41,14 +41,22 @@ final class StaleTest {
 
         t.group("Stale, the trampoline's request");
 
-        t.test("the phone was opened meanwhile: dropped", () -> yes("stale", Stale.isRequestStale(OPEN)));
+        t.test("the phone was opened meanwhile: dropped", () ->
+                same("why stale", "phone is open", Stale.whyRequestStale(OPEN, !STATE_CLOSED)));
 
-        t.test("still closed: goes through", () -> no("stale", Stale.isRequestStale(CLOSED)));
+        t.test("still closed: goes through", () -> same("why stale", null, Stale.whyRequestStale(CLOSED, !STATE_CLOSED)));
 
         t.test("no hall reading: goes through", () ->
                 // current behaviour, pinned as found: only a definite "open" stops a request, so one that
                 // arrives after the service stopped is still made, with nobody left to confirm it.
-                no("stale", Stale.isRequestStale(NO_READING)));
+                same("why stale", null, Stale.whyRequestStale(NO_READING, !STATE_CLOSED)));
+
+        t.test("Android's own state has become CLOSED meanwhile: dropped, whatever the hall reading", () -> {
+            String why = "Android's device state is closed";
+            same("hall closed", why, Stale.whyRequestStale(CLOSED, STATE_CLOSED));
+            same("no reading", why, Stale.whyRequestStale(NO_READING, STATE_CLOSED));
+            same("hall open: that is said first", "phone is open", Stale.whyRequestStale(OPEN, STATE_CLOSED));
+        });
 
         t.group("Stale, the curtain");
 

@@ -35,7 +35,7 @@ On some phones the same damage also means the outer screen is **only detected wh
 
 - the hall sensor doesn't react either (the FoldFix app shows this on its status screen, the screen you see when you open it),
 - the outer screen stays undetected even after restarting with the phone closed, or
-- your phone already switches screens normally. Don't turn FoldFix on there. Where Android itself knows that the phone is closed, FoldFix's request for the outer screen brings up an "Unfold phone" dialog on it. (Seen with the closed state forced from a computer; FoldFix hasn't been tried on a phone with a working hinge sensor.)
+- your phone already switches screens normally. FoldFix has nothing to add there. While Android itself has the phone in its closed state, FoldFix asks for nothing, and its status reads `Closed: Android has switched to the outer screen by itself`. That has only been tried with the closed state forced from a computer, on a phone whose hinge sensor is dead: FoldFix hasn't been run on a phone with a working one. What isn't known is the moment of closing or opening, when the two sensors may disagree for an instant. FoldFix may then ask for the outer screen and take that back, which could show as a flicker.
 
 ## Privacy and permissions
 
@@ -56,7 +56,7 @@ What it reads:
 
   To find the dialog, it asks Android for the list of windows on screen and looks at the type of each. It opens only the ones Android lists as system windows, asks of each which app it belongs to, and searches only System UI's, for the dialog's title and its two buttons. It finds them by their internal names (view IDs), not by their text.
 
-  Android's system windows include the ones that other apps draw on top of the screen, such as a screen filter or an app's floating button. FoldFix opens such a window too, sees that it isn't System UI's, and goes no further. It never opens an app's ordinary windows, and it doesn't read, log or store any text from the screen or anything you type.
+  Android's system windows include the ones that other apps draw on top of the screen, such as a screen filter or an app's floating button. FoldFix opens such a window too, sees that it isn't System UI's, and goes no further. (A window doesn't say whose it is until it is opened.) It never opens an app's ordinary windows, and it doesn't read, log or store any text from the screen or anything you type.
 - **Three sensors:** the hall-effect sensor; the hinge-angle sensor, only while FoldFix's status screen is open; and the orientation sensor that auto-rotate uses, only while the phone is closed with the outer screen on.
 - **The phone's state:** the fold state that Android reports (the "device state"), how many built-in screens Android found, which way the screen is turned, whether the screen is on, and whether the phone is locked. The last three are for keeping landscape the right way up, as is a fixed Android setting that says in which fold states Android reverses landscape.
 - **About itself,** for the status screen: whether its service is turned on (it asks Android for the enabled accessibility services and looks for its own), its version, and the certificate it was signed with.
@@ -105,6 +105,7 @@ That is one phone. Everything added since version 1.0.1 was tested on it while i
 
 - ending an outer-screen request that another app left behind,
 - bringing Pixel Camera back to the inner screen after unfolding, and Camera's selfie button on the closed phone,
+- standing back while Android itself has the phone in its closed state. The test phone's hinge sensor never reports that state, so it was forced from a computer,
 - the **Switch to the inner screen** button and the **Recent activity** history. The status screen can't be opened on a locked phone, so both were tried with a test build that shows it over the lock screen.
 
 The app installs on Android 13 and newer. Rear-display mode and its "Switch screens?" dialog are expected on recent Android versions, but only Android 17 has been tested.
