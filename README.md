@@ -137,7 +137,7 @@ Fold and unfold once. Then open FoldFix and check:
 - **Hall sensor** shows the right `closed` / `open` state.
 - **Rear-display access** says `OK`.
 
-If it says `Open: another app is using the outer screen`, an app such as Pixel Camera switched screens on purpose. FoldFix leaves that alone; leave the app to switch back.
+If it says `Open: another app is using the outer screen`, an app such as Pixel Camera switched screens while the phone was open. FoldFix leaves that alone, so switch back in that app. If the outer screen stays on after you've left the app, close and open the phone once: FoldFix ends any outer-screen request it finds still active on a closed phone when you open it.
 
 **It says "Rear-display mode is unavailable right now".**
 Android sometimes refuses rear-display mode, possibly in battery saver or when the phone is hot. FoldFix keeps checking and switches as soon as Android allows it.
@@ -220,7 +220,7 @@ FoldFix:
 - only looks at System UI. Its accessibility configuration limits events to `com.android.systemui`. To find the dialog, it only opens system windows, and only searches those that belong to System UI, by view ID. It never opens other apps' windows, and it doesn't read, log or store any text from the screen or anything you type.
 - reads the hall-effect and hinge-angle sensors, and the orientation sensor that auto-rotate uses.
 - requests **no Android permissions**, not even internet access. It collects no data and has no analytics or ads.
-- stores one setting on the phone: whether its own rear-display request may still be active.
+- stores one setting on the phone: whether a rear-display request that it has to end (its own, or one another app left behind) may still be active.
 - is open source. You can read the code and [build it yourself](#build-from-source).
 
 ## How it works

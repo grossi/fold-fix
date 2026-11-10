@@ -20,7 +20,7 @@ The code is in `app/src/app/foldfix/`:
 | File | Role |
 | --- | --- |
 | `FoldService.java` | The accessibility service: hall sensor, reconcile loop, dialog tapping |
-| `RearDisplay.java` | Starts and ends rear-display mode (two backends), tracks whether the request is FoldFix's |
+| `RearDisplay.java` | Starts and ends rear-display mode (two backends), tracks whether the request is FoldFix's to end |
 | `RotationFix.java` | Corrects landscape on the outer screen while the phone is closed |
 | `Trampoline.java` | Invisible activity that makes the request or cancel as the top app |
 | `Hardware.java` | Finds the hall sensor; checks whether the outer display exists |
@@ -183,12 +183,12 @@ FoldFix doesn't treat each sensor event as a one-off command. It keeps comparing
 
 | Hall sensor | Rear-display mode | What FoldFix does |
 | --- | --- | --- |
-| Closed | Active (anyone's request) | Nothing |
+| Closed | Active (anyone's request) | Nothing now. If the request is another app's, FoldFix takes it over, to end it on open (see [Whose request is it?](#6-whose-request-is-it)) |
 | Closed | Not active, FoldFix's request waiting for its dialog | Confirm the dialog once it shows |
 | Closed | Not active, no request of FoldFix's in flight | Request |
-| Open | Active with FoldFix's request | End the request |
+| Open | Active with FoldFix's request, or one it took over while closed | End the request |
 | Open | FoldFix's request waiting for its dialog | Tap **Cancel** in the dialog when it shows (the only way to drop it) |
-| Open | Another app's request, or none | Nothing (but still cancels a dialog appearing within 3 s of its last request) |
+| Open | A request another app made while open, or none | Nothing (but still cancels a dialog appearing within 3 s of its last request) |
 
 Timing:
 
@@ -206,15 +206,26 @@ Reacting to single sensor events isn't enough: a fast close, open, close while a
 
 Some facts about requests that shaped the design:
 
-- **A cancel from the top app ends whatever request is active, whoever made it.** The system doesn't check ownership. So "only cancel our own" is enforced in FoldFix's own logic: it tracks whether the active or pending request is its own, and never cancels otherwise. Other apps' rear-display features, such as Pixel Camera's rear-camera selfie mode, keep working.
+- **A cancel from the top app ends whatever request is active, whoever made it.** The system doesn't check ownership. So which requests get cancelled is decided by FoldFix's own logic: it tracks whether the active or pending request is its own, or one it took over (see [below](#other-apps-leftover-requests)), and never cancels otherwise. A request another app makes while the phone is open, such as Pixel Camera's rear-camera selfie mode, is left alone.
 - **A waiting request can't be cancelled through the API.** Until its dialog is answered, only the dialog's buttons resolve it (see [the dialog](#4-the-switch-screens-dialog)).
-- **An active request outlives the process that made it.** The system keeps an active state-3 request until the device reaches CLOSED, which a dead hinge sensor never reports. Only *pending* requests (not yet confirmed) die with their process.
+- **An active request outlives the process that made it.** The system keeps an active rear-display request (state 3 or 5) until the device reaches CLOSED, which a dead hinge sensor never reports. Only *pending* requests (not yet confirmed) die with their process.
 
-Because of the last point, FoldFix saves "our request may be active" in device-protected storage, which is readable before the first unlock. It clears the flag once it sees rear-display mode turn off. Without this, updating or restarting FoldFix while the phone is closed would leave nobody responsible for the request, and the phone would stay on the outer screen after unfolding. A reboot clears any request.
+Because of the last point, FoldFix saves "a request that FoldFix has to end may be active" in device-protected storage, which is readable before the first unlock. It clears the flag once it sees rear-display mode turn off. Without this, updating or restarting FoldFix while the phone is closed would leave nobody responsible for the request, and the phone would stay on the outer screen after unfolding. A reboot clears any request.
+
+#### Other apps' leftover requests
+
+The last point holds for every app's request, not just FoldFix's. On an affected phone, a request that Pixel Camera made stays active after Camera is left, and even after it is force-stopped. If the phone is closed at that point, FoldFix sees rear-display mode active and has nothing to do. If it only ever ended its own requests, the phone would then stay on the outer screen after every unfolding. With Camera's state-5 request, the inner screen would show System UI's "Front screen turned on / Slide to use inner screen" prompt instead of the user's apps.
+
+So FoldFix follows one rule: **a rear-display request that is active while the phone is closed is FoldFix's to end when the phone opens, whoever made it.** Nobody uses rear-camera selfie mode with the phone shut, so a request seen there is either FoldFix's own or a leftover.
+
+- When the hall sensor reads closed and rear-display mode is active through a request that isn't FoldFix's, FoldFix takes the request over ("adopts" it) and logs that. The saved flag covers it, so this survives a FoldFix restart too.
+- On open, it ends an adopted request exactly like its own.
+- It ends it once. If another app then makes a new request while the phone is open, FoldFix leaves that one alone, like any request made on an open phone. Pixel Camera does this when it is on screen at that moment. The new request is adopted at the next close and ended at the next open.
+- While the phone stays closed, FoldFix doesn't replace an adopted request with its own. Cancelling would blank the screen the user is looking at, and the other app could request again. See [What FoldFix can't do](#what-foldfix-cant-do) for the cost.
 
 #### Turning FoldFix off
 
-Turning the service off can't release its request. Once unbound, the service is no longer allowed to start the trampoline (`BAL_BLOCK`), and only the top app can cancel. FoldFix's status screen covers this case. If it's open while the service is off, the phone is open and FoldFix's request is still active, the screen cancels the request itself (it's the top app) and says so. Turning FoldFix back on, or rebooting, also releases it. That's why the README advises turning FoldFix off or uninstalling it with the phone open.
+Turning the service off can't release its request. Once unbound, the service is no longer allowed to start the trampoline (`BAL_BLOCK`), and only the top app can cancel. FoldFix's status screen covers this case. If it's open while the service is off, the phone is open and a request that FoldFix has to end (its own or an adopted one) is still active, the screen cancels the request itself (it's the top app) and says so. Turning FoldFix back on, or rebooting, also releases it. That's why the README advises turning FoldFix off or uninstalling it with the phone open.
 
 ### 7. The outer-screen guard
 
@@ -299,3 +310,4 @@ As with a real fold, the switch can be delayed while the screen is off; `adb she
 - **Half-open postures** (tabletop mode and apps that adapt to a half-folded phone) need the hinge angle. The hall sensor only knows closed or not closed.
 - **The fold/unfold animation** is driven by the hinge angle, so it doesn't play.
 - **Detecting the outer screen** happens in the bootloader, before any app runs. If the phone booted open and the outer panel wasn't found, only a reboot with the phone closed brings it back.
+- **Turning the inner screen off under another app's request.** If another app's state-5 request is active when the phone is closed, FoldFix keeps it until the phone is opened (see [Other apps' leftover requests](#other-apps-leftover-requests)). State 5 leaves the inner screen on, so until then the folded inner screen is lit whenever the outer one is.

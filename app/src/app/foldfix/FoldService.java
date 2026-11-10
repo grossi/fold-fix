@@ -24,7 +24,10 @@ import android.view.accessibility.AccessibilityWindowInfo;
  * it reconciles hall vs. device state every {@link #POLL_MS} until they agree.
  *
  * <p>It never fights other apps: Pixel Camera's rear-screen selfie mode uses the same state and
- * dialog, so the service only confirms, cancels or ends requests it made itself.
+ * dialog, so the service only answers the dialog of a request it made itself. The requests it
+ * ends are its own, and any it found active while the phone was closed: that one is a leftover
+ * which nothing else would end (see {@link RearDisplay#adopt}). Another app's request is never
+ * touched while the phone stays open.
  *
  * <p>While the phone is closed on the outer screen, {@link RotationFix} keeps landscape the right
  * way up (rear-display mode turns it upside down).
@@ -166,6 +169,9 @@ public class FoldService extends AccessibilityService implements SensorEventList
 
         if (closed) {
             if (rear) {  // already on the outer screen, whoever asked for it
+                // Another app's request can't be meant for a closed phone, and it never ends by
+                // itself: take it over, so that opening the phone ends it like one of ours.
+                if (!ours) rd.adopt();
                 tries = 0;
                 setStatus("Closed: outer screen on");
                 return;
@@ -189,7 +195,9 @@ public class FoldService extends AccessibilityService implements SensorEventList
             // ownership was dropped, and tapping "Switch" there would strand the phone in
             // rear-display mode while open.
             boolean recent = now - lastRequest < DIALOG_WAIT_MS;
-            if (!ours && !recent) {  // nothing of ours to undo; never touch other apps' requests
+            // Nothing of ours to undo. A request another app made while the phone is open (the
+            // real selfie mode) is left alone, even right after we ended one.
+            if (!ours && !recent) {
                 tries = 0;
                 setStatus(rear ? "Open: another app is using the outer screen" : "Open: inner screen on");
                 return;

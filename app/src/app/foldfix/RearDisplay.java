@@ -43,6 +43,9 @@ import java.util.regex.Pattern;
  *     CLOSED, which a dead hinge sensor never reports.
  * </ul>
  *
+ * <p>So an active request only ends when someone cancels it. FoldFix does that for its own
+ * requests and for those it {@linkplain #adopt adopted}, and for no others.
+ *
  * <p>One instance per process, shared by the service and the trampoline activity: the extension
  * keeps per-process session state. Everything runs on the main thread; listeners are posted.
  */
@@ -87,8 +90,9 @@ final class RearDisplay {
     /** FoldService is about to request, or this process's request is pending or active. */
     private volatile boolean ownRequest;
     /**
-     * A request made by an earlier FoldFix process may still be active (requests are sticky,
-     * see above), so ownership is persisted.
+     * FoldFix has to end an active request this process didn't make: an earlier FoldFix process's,
+     * or another app's that was {@linkplain #adopt adopted}. Persisted, because such a request
+     * outlives this process too (requests are sticky, see above).
      */
     private volatile boolean inherited;
     /** Uptime when this process's current request was accepted, 0 if there is none. */
@@ -135,7 +139,7 @@ final class RearDisplay {
         return area == null || extStatus != STATUS_UNAVAILABLE;
     }
 
-    /** Whether the active or pending rear-display request (if any) is FoldFix's. */
+    /** Whether the active or pending rear-display request (if any) is FoldFix's to end. */
     boolean hasOwnRequest() {
         return ownRequest || inherited;
     }
@@ -157,6 +161,18 @@ final class RearDisplay {
             ownRequest = false;
             save();
         }
+    }
+
+    /**
+     * Makes the active request FoldFix's to end, like one of its own, if it isn't already. Called
+     * by FoldService when it finds another app's request while the phone is closed: that app has
+     * no use for it there, and nothing else would ever end it (requests are sticky, see above).
+     */
+    void adopt() {
+        if (hasOwnRequest() || !isRearActive()) return;
+        Log.i(TAG, "adopting the active rear display request (" + describeState() + ")");
+        inherited = true;
+        save();
     }
 
     /** Human-readable device state, best effort (for the status screen and logs). */
@@ -229,9 +245,9 @@ final class RearDisplay {
     }
 
     /**
-     * Ends rear-display mode if it is active. Only call this for FoldFix's own request: the
-     * system cancels the active request whoever made it. Shows no dialog. Returns false if the
-     * system refused (caller not the top app).
+     * Ends rear-display mode if it is active. Only call this for a request that is FoldFix's to
+     * end ({@link #hasOwnRequest}): the system cancels the active request whoever made it. Shows
+     * no dialog. Returns false if the system refused (caller not the top app).
      */
     boolean cancel() {
         if (!isRearActive()) {
@@ -440,8 +456,8 @@ final class RearDisplay {
 
     private void onStateChanged() {
         if (inherited && !ownRequest && !isRearActive()) {
-            Log.i(TAG, "earlier request is gone");
-            setOwn(false);  // rear display is off, so whatever we requested before has ended
+            Log.i(TAG, "earlier or adopted request is gone");
+            setOwn(false);  // rear display is off, so the request we had to end has ended
         }
         notifyListeners();
     }
