@@ -23,33 +23,26 @@ import java.io.PrintWriter;
  *
  * <p>Each request makes SystemUI ask "Switch screens?" on the inner screen, which is folded shut
  * at that moment, so the service answers the dialog itself. Rather than trusting single events,
- * it reconciles hall vs. device state every {@link #POLL_MS} until they agree.
+ * it reconciles hall vs. device state every {@link Reconciler#POLL_MS} until they agree. What it
+ * does at each step is decided by {@link Reconciler}, which holds the rules; this class reads the
+ * sensor, finds and taps the dialog, and starts the activities.
  *
  * <p>It never fights other apps: Pixel Camera's rear-screen selfie mode uses the same state and
  * dialog, so the service only answers the dialog of a request it made itself. The requests it
  * ends are its own, and any it found active while the phone was closed: that one is a leftover
  * which nothing else would end (see {@link RearDisplay#adopt}). A request another app makes while
  * the phone is open is left alone, with one exception: the first one made within
- * {@link #REREQUEST_MS} of the service ending a request on open is ended too, once (see
+ * {@link Reconciler#REREQUEST_MS} of the service ending a request on open is ended too, once (see
  * {@link Curtain}). That one is Pixel Camera wanting back the mode it was started in.
  *
  * <p>While the phone is closed on the outer screen, {@link RotationFix} keeps landscape the right
  * way up (rear-display mode turns it upside down).
  */
-public class FoldService extends AccessibilityService implements SensorEventListener {
+public class FoldService extends AccessibilityService implements SensorEventListener, Reconciler.Phone {
     static final String SYSTEMUI = "com.android.systemui";
     static final String DIALOG_TITLE_ID = SYSTEMUI + ":id/rear_display_title_text_view";
     /** Dialog buttons by ID, not label, so it works in every language. */
     static final String CONFIRM_ID = "android:id/button1", CANCEL_ID = "android:id/button2";
-
-    static final long POLL_MS = 200;
-    static final long RETRY_MS = 2_000;
-    static final long BACKOFF_MS = 30_000;    // after MAX_FAST_TRIES launches that didn't help
-    static final int MAX_FAST_TRIES = 5;
-    static final long DIALOG_WAIT_MS = 3_000; // how long a dialog may take to show up
-    static final long BLOCKED_RECHECK_MS = 5_000;
-    /** Another app's request this soon after our cancel on open is a reflex, not the user's choice. */
-    static final long REREQUEST_MS = 3_000;
 
     /** What the service is doing, for the status screen; null while it isn't running. */
     static volatile String status;
@@ -69,19 +62,16 @@ public class FoldService extends AccessibilityService implements SensorEventList
     SensorManager sm;
     RearDisplay rd;
     RotationFix rotation;
+    /**
+     * The rules, and what they keep between steps. Made at the first connection and kept if the
+     * system connects this instance again.
+     */
+    Reconciler rules;
     boolean running;
     /** The hall reading being acted on: the sensor's, or the simulated one. */
     Boolean closed;
     /** The sensor's last reading, also kept up to date while a simulated one is in use. */
     Boolean sensorClosed;
-    long lastLaunch, lastRequest;
-    int tries;
-    /** Real time of the first cancel sent since the last fold or unfold, 0 if there was none. */
-    long cancelSentAt;
-    /** The one follow-up of this opening is used up (see {@link Curtain}). */
-    boolean followedUp;
-    /** The last of another app's requests that was looked at (see {@link RearDisplay#activations}). */
-    int otherSeen;
 
     @Override
     protected void onServiceConnected() {
@@ -96,6 +86,7 @@ public class FoldService extends AccessibilityService implements SensorEventList
         // reading again on registering, and that first reading resets the rest (see onHall).
         closed = sensorClosed = hallClosed = null;
         rd = RearDisplay.get(this);
+        if (rules == null) rules = new Reconciler(rd, this);
         rd.addListener(reconcile);
         // Likewise: the old helper would keep its overlay, listeners and receiver.
         if (rotation != null) rotation.setActive(false);
@@ -135,11 +126,7 @@ public class FoldService extends AccessibilityService implements SensorEventList
         if (closed != null && closed == c) return;
         FoldLog.i("hall " + name(c) + (simulatedHall != null ? " (simulated)" : ""));
         closed = hallClosed = c;
-        lastLaunch = 0;
-        tries = 0;
-        cancelSentAt = 0;
-        followedUp = false;
-        otherSeen = 0;
+        rules.onFold();
         reconcile();
     }
 
@@ -169,144 +156,70 @@ public class FoldService extends AccessibilityService implements SensorEventList
         return closed ? "closed" : "open";
     }
 
-    /** One step towards "closed ⇔ rear display"; re-arms itself until that holds. */
+    /** One step towards "closed ⇔ rear display"; re-arms itself until that holds (see {@link Reconciler}). */
     void reconcile() {
         h.removeCallbacks(reconcile);
-        if (!running || closed == null) return;
-        rotation.setActive(closed && rd.isRearActive());
-        if (rd.backend() == null) {
-            setStatus("No rear-display access: run the one-time adb command");
-            return;  // can only change after a restart
-        }
-        // Wait until the device state is known too: acting earlier can put a dialog on the
-        // outer screen.
-        if (!rd.isKnown()) return;
-        boolean rear = rd.isRearActive();
-        boolean ours = rd.hasOwnRequest();
-        long now = SystemClock.uptimeMillis();
-
-        if (closed) {
-            if (rear) {  // already on the outer screen, whoever asked for it
-                // Our own request can still be waiting for its dialog: another app's got in first
-                // (Pixel Camera's does, when its selfie button has just ended ours). The dialog
-                // then comes up on the outer screen, in front of the user. Confirm it, which puts
-                // our request in place of the other one.
-                if (rd.isSessionWaiting()) {
-                    AccessibilityNodeInfo dialog = findDialog();
-                    if (dialog != null) click(dialog, CONFIRM_ID);
-                    if (now - lastLaunch < DIALOG_WAIT_MS) h.postDelayed(reconcile, POLL_MS);
-                }
-                // Another app's request can't be meant for a closed phone, and it never ends by
-                // itself: take it over, so that opening the phone ends it like one of ours.
-                if (!ours) rd.adopt();
-                tries = 0;
-                setStatus("Closed: outer screen on");
-                return;
-            }
-            String blocked = whyNotPossible();
-            if (blocked != null) {
-                setStatus(blocked);
-                h.postDelayed(reconcile, BLOCKED_RECHECK_MS);
-                return;
-            }
-            AccessibilityNodeInfo dialog = ours ? findDialog() : null;
-            if (dialog != null) {
-                click(dialog, CONFIRM_ID);
-            } else if (!rd.isSessionLive() && now - lastLaunch > retryDelay()) {
-                // Not while our request is in flight: a confirmed switch can take a moment.
-                launch(Trampoline.REQUEST);
-            }
-            setStatus("Closed: switching to the outer screen");
-        } else {
-            // Rear display back on through another app's request, and the last time it went off was
-            // the doing of a cancel sent since the phone was opened.
-            long cancelled = rd.endingCancelAt();
-            if (rear && !ours && cancelSentAt != 0 && cancelled >= cancelSentAt
-                    && otherSeen != rd.activations()) {
-                followUp(cancelled);
-            }
-            // Also look for a dialog shortly after our last request: one can still pop up after
-            // ownership was dropped, and tapping "Switch" there would strand the phone in
-            // rear-display mode while open.
-            boolean recent = now - lastRequest < DIALOG_WAIT_MS;
-            // Nothing of ours to undo. A request another app made while the phone is open (the
-            // real selfie mode) is left alone, apart from the one followUp() deals with.
-            if (!ours && !recent) {
-                tries = 0;
-                // A cancel of ours drops ownership a moment before rear-display mode is seen going
-                // off: until then that isn't another app's. Looked at again in case it stays on.
-                boolean ending = rear && rd.isCancelPending();
-                if (ending) h.postDelayed(reconcile, RearDisplay.CANCEL_EFFECT_MS);
-                setStatus(ending ? "Open: switching back to the inner screen"
-                        : rear ? "Open: another app is using the outer screen" : "Open: inner screen on");
-                return;
-            }
-            AccessibilityNodeInfo dialog = findDialog();
-            if (dialog != null) {
-                // The only way to drop a request that is still waiting for its dialog.
-                click(dialog, CANCEL_ID);
-            } else if (ours && rear && now - lastLaunch > retryDelay()) {
-                // Like requests, cancels are only accepted from the top app, hence the trampoline.
-                launch(Trampoline.CANCEL);
-            } else if (!rear && !recent) {
-                // Ours but pending, dialog not up (yet): wait for SystemUI events instead of polling.
-                setStatus("Open: waiting for the request's dialog to cancel it");
-                return;
-            }
-            setStatus("Open: switching back to the inner screen");
-        }
-        h.postDelayed(reconcile, now - lastLaunch < DIALOG_WAIT_MS ? POLL_MS : retryDelay());
+        if (running) rules.reconcile(closed);
     }
 
-    /**
-     * Another app got rear-display mode after a cancel of ours, made at real time
-     * {@code cancelled}, ended it on open. If that was the first time and within
-     * {@link #REREQUEST_MS} of that cancel, it is the app on screen asking again for the mode it
-     * was started in (Pixel Camera does): end that request too, once, behind the curtain. Anything
-     * later or repeated is the app's business, and is only logged. Real time, not uptime, so that
-     * sleeping doesn't stretch the window.
-     */
-    void followUp(long cancelled) {
-        otherSeen = rd.activations();
-        long after = SystemClock.elapsedRealtime() - cancelled;
-        String what = "another app turned rear display on " + after + " ms after our cancel: ";
-        if (followedUp || after >= REREQUEST_MS) {
-            FoldLog.i(what + "left alone");
-            return;
-        }
-        followedUp = true;
-        FoldLog.i(what + "ending that once");
-        Curtain.start(this, cancelled + REREQUEST_MS, otherSeen);
+    // ---- what the rules read and do (Reconciler.Phone) -------------------------------------
+
+    @Override
+    public long uptime() {
+        return SystemClock.uptimeMillis();
     }
 
-    long retryDelay() {
-        return tries < MAX_FAST_TRIES ? RETRY_MS : BACKOFF_MS;
+    @Override
+    public long realtime() {
+        return SystemClock.elapsedRealtime();
     }
 
-    /** Reasons not to request rear-display mode right now (checked each time, it's cheap). */
-    String whyNotPossible() {
-        if (!Hardware.outerDisplayPresent(this)) {
-            // Booted open: the outer panel was never brought up, and forcing rear-display mode
-            // would crash the system.
-            return "Outer screen not detected: restart the phone while it is closed";
-        }
-        if (!rd.isAvailable()) return "Rear-display mode is unavailable right now (battery saver or heat?)";
-        return null;
+    @Override
+    public boolean outerDisplayPresent() {
+        return Hardware.outerDisplayPresent(this);
     }
 
-    void launch(String action) {
-        long now = SystemClock.uptimeMillis();
-        lastLaunch = now;
-        tries++;
-        if (Trampoline.REQUEST.equals(action)) {
-            lastRequest = now;
-            rd.markRequestPending();
-        } else if (cancelSentAt == 0) {
-            cancelSentAt = SystemClock.elapsedRealtime();
-        }
-        FoldLog.i(action + " rear display (try " + tries + ", " + rd.describeState() + ")");
+    @Override
+    public boolean tapDialog(boolean confirm) {
+        AccessibilityNodeInfo dialog = findDialog();
+        if (dialog != null) click(dialog, confirm ? CONFIRM_ID : CANCEL_ID);
+        return dialog != null;
+    }
+
+    @Override
+    public void launch(String action) {
+        if (Trampoline.REQUEST.equals(action)) rd.markRequestPending();
+        FoldLog.i(action + " rear display (try " + rules.tries + ", " + rd.describeState() + ")");
         Trampoline.start(this, action);
     }
+
+    @Override
+    public void startCurtain(long deadline, int activation) {
+        Curtain.start(this, deadline, activation);
+    }
+
+    @Override
+    public void setLandscapeFix(boolean active) {
+        rotation.setActive(active);
+    }
+
+    @Override
+    public void setStatus(String s) {
+        if (!s.equals(status)) FoldLog.i("status: " + s);
+        status = s;
+    }
+
+    @Override
+    public void log(String line) {
+        FoldLog.i(line);
+    }
+
+    @Override
+    public void lookAgainIn(long ms) {
+        h.postDelayed(reconcile, ms);
+    }
+
+    // ---- the dialog ------------------------------------------------------------------------
 
     /**
      * Root of SystemUI's "Switch screens?" dialog, or null. Only system windows are opened, and
@@ -335,19 +248,10 @@ public class FoldService extends AccessibilityService implements SensorEventList
         FoldLog.w("dialog up but no " + buttonId + " yet");
     }
 
-    void setStatus(String s) {
-        if (!s.equals(status)) FoldLog.i("status: " + s);
-        status = s;
-    }
-
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
         // Fast path for the dialog appearing; skip the window scan when there's nothing to do.
-        if (!running || closed == null || !rd.isKnown()) return;
-        boolean recent = SystemClock.uptimeMillis() - lastRequest < DIALOG_WAIT_MS;
-        if (closed ? !rd.isRearActive() || rd.isSessionWaiting() : rd.hasOwnRequest() || recent) {
-            h.post(reconcile);
-        }
+        if (running && rules.dialogMatters(closed)) h.post(reconcile);
     }
 
     // Turning the service off can't end our request: once unbound, Android blocks the trampoline

@@ -276,9 +276,19 @@ The build picks the newest installed build-tools and platform automatically. The
 
 Android only installs an update over an existing app if both are signed with the same key. If you switch between your own build and a release, uninstall first; you'll need to turn the accessibility service on again afterwards. The status screen's **Version** section says which of the two is installed.
 
+### Tests
+
+```sh
+./test.sh
+```
+
+This needs only the JDK: no Android SDK, no phone, and no test library. It compiles the tests in `tests/` together with the classes that hold FoldFix's rules, runs them on your computer, prints each case that failed with what was expected and what came instead, and exits with an error if any did.
+
+The tests check what FoldFix decides: when it requests, confirms, cancels, takes over a request or leaves one alone, and when it tries again. They don't check what Android does with those decisions. Sensors, the dialog, the device-state calls and the screens themselves can only be tested on a phone (see [Testing and logs](docs/how-it-works.md#testing-and-logs)). Nothing in `tests/` ends up in the APK.
+
 ### Releases
 
-GitHub Actions ([`.github/workflows/build.yml`](.github/workflows/build.yml)) has two jobs:
+GitHub Actions ([`.github/workflows/build.yml`](.github/workflows/build.yml)) has two jobs. Both run `./test.sh` first and stop if a test fails:
 
 - **Pushes to `main`, pull requests and manual runs from a branch:** build with a throwaway debug key and upload `fold-fix.apk` and its SHA-256 checksum as a build artifact. These builds never see the release key. They won't install over a release or over each other without uninstalling first.
 - **Tags `v*`:** build with the release key and publish a GitHub Release with `fold-fix.apk` and its checksum attached. The build log prints the signing certificate's SHA-256. This job fails if:

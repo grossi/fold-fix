@@ -51,7 +51,7 @@ import java.util.regex.Pattern;
  * <p>One instance per process, shared by the service and the trampoline activity: the extension
  * keeps per-process session state. Everything runs on the main thread; listeners are posted.
  */
-final class RearDisplay {
+final class RearDisplay implements Reconciler.Rear {
     static final String ADB_COMMAND =
             "adb shell settings put global hidden_api_blacklist_exemptions Landroid/hardware/devicestate/";
 
@@ -59,11 +59,6 @@ final class RearDisplay {
     static final int STATE_REAR_DISPLAY = 3;
     /** Rear-display "v2" state: outer screen is the default, inner stays on with a prompt. */
     static final int STATE_REAR_DISPLAY_OUTER_DEFAULT = 5;
-    /** A request still waiting for its dialog after this long is considered lost and redone. */
-    static final long STALE_SESSION_MS = 10_000;
-    /** Rear-display mode going off within this long of a cancel made here is that cancel's doing. */
-    static final long CANCEL_EFFECT_MS = 2_000;
-
     // WindowAreaComponent values (stable extensions API).
     static final int STATUS_UNAVAILABLE = 1, STATUS_ACTIVE = 3;
     static final int SESSION_INACTIVE = 0;
@@ -90,35 +85,17 @@ final class RearDisplay {
     private boolean hiddenWatched;
     private volatile int hiddenState = -1;
 
-    /** FoldService is about to request, or this process's request is pending or active. */
-    private volatile boolean ownRequest;
     /**
-     * FoldFix has to end an active request this process didn't make: an earlier FoldFix process's,
-     * or another app's that was {@linkplain #adopt adopted}. Persisted, because such a request
-     * outlives this process too (requests are sticky, see above).
+     * Whose request it is, and how far this process's own has got. What it calls ours is saved,
+     * because a request that FoldFix has to end outlives this process (requests are sticky, see
+     * above).
      */
-    private volatile boolean inherited;
-    /** Uptime when this process's current request was accepted, 0 if there is none. */
-    private volatile long sessionStart;
-    /** The current request has been activated (the dialog was confirmed). */
-    private volatile boolean sessionActive;
-    /** Bumped per request, so a replaced request's "ended" callback can't clear the new one. */
-    private volatile int generation;
-    /** How often rear-display mode has turned on, and whether it was on at the last look. */
-    private volatile int activations;
-    private boolean wasActive;
-    /**
-     * Real time (it counts sleep too) of the last cancel made here, until its effect is seen. Not
-     * set by {@link #cancelForUser}.
-     */
-    private long cancelledAt;
-    /** Real time of the cancel made here that last turned rear-display mode off; else 0. */
-    private volatile long endingCancelAt;
+    private final Ownership own;
 
     private RearDisplay(Context app) {
         dsm = app.getSystemService("device_state");
         prefs = app.createDeviceProtectedStorageContext().getSharedPreferences("state", Context.MODE_PRIVATE);
-        inherited = prefs.getBoolean("request_active", false);
+        own = new Ownership(prefs.getBoolean("request_active", false), this::save);
         initExtension();
         if (area == null) watchHiddenState();
     }
@@ -126,7 +103,8 @@ final class RearDisplay {
     // ---- state ----------------------------------------------------------------------------
 
     /** Backend in use, or null if none works (then {@link #ADB_COMMAND} is needed). */
-    String backend() {
+    @Override
+    public String backend() {
         if (area != null) return "window extensions";
         if (hiddenWatched) return "hidden API";
         return null;
@@ -137,12 +115,14 @@ final class RearDisplay {
     }
 
     /** Whether the current device state is known yet (don't act before it is). */
-    boolean isKnown() {
+    @Override
+    public boolean isKnown() {
         return area != null ? extStatus >= 0 : hiddenState >= 0;
     }
 
     /** Whether rear-display mode is active, no matter who requested it. */
-    boolean isRearActive() {
+    @Override
+    public boolean isRearActive() {
         if (area != null) return extStatus == STATUS_ACTIVE;
         return hiddenState == STATE_REAR_DISPLAY || hiddenState == STATE_REAR_DISPLAY_OUTER_DEFAULT;
     }
@@ -151,8 +131,9 @@ final class RearDisplay {
      * Counts how often rear-display mode has turned on (1 or more while it is on). Unchanged means
      * it didn't go off in between; a request replaced by another without that doesn't show.
      */
-    int activations() {
-        return activations;
+    @Override
+    public int activations() {
+        return own.activations();
     }
 
     /**
@@ -162,51 +143,53 @@ final class RearDisplay {
      * seen going off. The time of the cancel, not of the callback, which can be late: so nothing
      * counted from it can run longer than meant.
      */
-    long endingCancelAt() {
-        return endingCancelAt;
+    @Override
+    public long endingCancelAt() {
+        return own.endingCancelAt();
     }
 
     /**
      * A {@link #cancel} made in this process is under way: it was sent less than
-     * {@link #CANCEL_EFFECT_MS} ago, and rear-display mode hasn't been seen going off since.
-     * Main thread only.
+     * {@link Ownership#CANCEL_EFFECT_MS} ago, and rear-display mode hasn't been seen going off
+     * since. Main thread only.
      */
-    boolean isCancelPending() {
-        return cancelledAt != 0 && SystemClock.elapsedRealtime() - cancelledAt < CANCEL_EFFECT_MS;
+    @Override
+    public boolean isCancelPending() {
+        return own.isCancelPending(SystemClock.elapsedRealtime());
     }
 
     /** False when the system currently refuses rear-display mode (e.g. battery saver, heat). */
-    boolean isAvailable() {
+    @Override
+    public boolean isAvailable() {
         return area == null || extStatus != STATUS_UNAVAILABLE;
     }
 
     /** Whether the active or pending rear-display request (if any) is FoldFix's to end. */
-    boolean hasOwnRequest() {
-        return ownRequest || inherited;
+    @Override
+    public boolean hasOwnRequest() {
+        return own.hasOwnRequest();
     }
 
     /** Our request is active, or still waiting for its dialog and not yet given up on. */
-    boolean isSessionLive() {
-        long start = sessionStart;
-        return start != 0 && (sessionActive || SystemClock.uptimeMillis() - start < STALE_SESSION_MS);
+    @Override
+    public boolean isSessionLive() {
+        return own.isSessionLive(SystemClock.uptimeMillis());
     }
 
     /** Our request was accepted and is still waiting for its dialog, and not yet given up on. */
-    boolean isSessionWaiting() {
-        return !sessionActive && isSessionLive();
+    @Override
+    public boolean isSessionWaiting() {
+        return own.isSessionWaiting(SystemClock.uptimeMillis());
     }
 
     /** Called by FoldService right before it launches the trampoline to request. */
     void markRequestPending() {
-        setOwn(true);
+        own.markRequestPending();
     }
 
     /** Called when a request intent turns out to be stale (the phone was opened meanwhile). */
     void dropPendingMark() {
-        if (sessionStart == 0) {
-            ownRequest = false;
-            save();
-        }
+        own.dropPendingMark();
     }
 
     /**
@@ -214,11 +197,11 @@ final class RearDisplay {
      * by FoldService when it finds another app's request while the phone is closed: that app has
      * no use for it there, and nothing else would ever end it (requests are sticky, see above).
      */
-    void adopt() {
-        if (hasOwnRequest() || !isRearActive()) return;
+    @Override
+    public void adopt() {
+        if (!own.canAdopt(isRearActive())) return;
         FoldLog.i("adopting the active rear display request (" + describeState() + ")");
-        inherited = true;
-        save();
+        own.adopt();
     }
 
     /** Human-readable device state, best effort (for the status screen and logs). */
@@ -256,23 +239,22 @@ final class RearDisplay {
             // Nothing to do. A second request would put another dialog up (on the outer screen if
             // it is already on) or restart a request whose switch is still under way. Ownership
             // stays with whoever has it: us if our request is outstanding or inherited.
-            FoldLog.i("rear display already on or requested (ours: " + (sessionStart != 0 || inherited)
+            FoldLog.i("rear display already on or requested (ours: " + (own.hasSession() || own.isInherited())
                     + "), not requesting again");
             dropPendingMark();
             return;
         }
-        setOwn(true);
-        int gen = ++generation;
+        int gen = own.begin();
         if (area != null) {
             try {
                 startExtensionSession(activity, gen);
-                sessionStarted();
+                own.sessionStarted(SystemClock.uptimeMillis());
                 FoldLog.i("rear display requested (window extensions)");
                 return;
             } catch (Throwable t) {
                 FoldLog.w("window extensions request failed: " + unwrap(t));
                 if (unwrap(t) instanceof SecurityException) {  // not top app: same for both backends
-                    setOwn(false);
+                    own.clear();
                     return;
                 }
             }
@@ -280,14 +262,14 @@ final class RearDisplay {
         if (hasHiddenApi()) {
             try {
                 requestHidden(gen);
-                sessionStarted();
+                own.sessionStarted(SystemClock.uptimeMillis());
                 FoldLog.i("rear display requested (hidden API)");
                 return;
             } catch (Throwable t) {
                 FoldLog.w("hidden API request failed: " + unwrap(t));
             }
         }
-        setOwn(false);
+        own.clear();
     }
 
     /**
@@ -314,8 +296,8 @@ final class RearDisplay {
             // Nothing active. A request still waiting for its dialog can't be cancelled through
             // the API (and the extension would lose track of it), only with the dialog's Cancel
             // button, so ownership is kept while one is outstanding.
-            FoldLog.i("nothing active to cancel" + (sessionStart != 0 ? ", request still waiting for its dialog" : ""));
-            if (sessionStart == 0) setOwn(false);
+            FoldLog.i("nothing active to cancel" + (own.hasSession() ? ", request still waiting for its dialog" : ""));
+            if (!own.hasSession()) own.clear();
             return true;
         }
         long at = SystemClock.elapsedRealtime();
@@ -332,9 +314,7 @@ final class RearDisplay {
             }
         }
         FoldLog.i("rear display request cancelled" + (byUser ? " from the status screen" : ""));
-        if (!byUser) cancelledAt = at;
-        generation++;
-        setOwn(false);
+        own.cancelled(at, byUser);
         return true;
     }
 
@@ -416,14 +396,14 @@ final class RearDisplay {
         Method start = area.getClass().getMethod("startRearDisplaySession", Activity.class, extConsumer);
         Object session = consumer(v -> {
             FoldLog.i("rear display session " + v);
-            if ((Integer) v == SESSION_INACTIVE) requestEnded(gen);
-            else requestActivated(gen);
+            if ((Integer) v == SESSION_INACTIVE) own.requestEnded(gen);
+            else own.requestActivated(gen);
         });
         try {
             start.invoke(area, activity, session);
         } catch (InvocationTargetException e) {
             // The extension allows one session per process; a lost one (still waiting for a
-            // dialog that never came, see STALE_SESSION_MS) is ended and replaced.
+            // dialog that never came, see Ownership.STALE_SESSION_MS) is ended and replaced.
             if (!(e.getCause() instanceof IllegalStateException)) throw e;
             area.getClass().getMethod("endRearDisplaySession").invoke(area);
             start.invoke(area, activity, session);
@@ -478,8 +458,8 @@ final class RearDisplay {
         Class<?> cbType = Class.forName("android.hardware.devicestate.DeviceStateRequest$Callback");
         Object cb = Proxy.newProxyInstance(cbType.getClassLoader(), new Class<?>[]{cbType},
                 (proxy, m, args) -> {
-                    if (m.getName().equals("onRequestCanceled")) main.post(() -> requestEnded(gen));
-                    if (m.getName().equals("onRequestActivated")) main.post(() -> requestActivated(gen));
+                    if (m.getName().equals("onRequestCanceled")) main.post(() -> own.requestEnded(gen));
+                    if (m.getName().equals("onRequestActivated")) main.post(() -> own.requestActivated(gen));
                     return objectMethod(proxy, m.getName(), args);
                 });
         dsm.getClass().getMethod("requestState", req, Executor.class, cbType)
@@ -518,45 +498,17 @@ final class RearDisplay {
 
     private void onStateChanged() {
         boolean active = isRearActive();
-        if (active && !wasActive) activations++;
-        if (!active && wasActive) {
-            long since = SystemClock.elapsedRealtime() - cancelledAt;
-            endingCancelAt = cancelledAt != 0 && since < CANCEL_EFFECT_MS ? cancelledAt : 0;
-            cancelledAt = 0;
-        }
-        wasActive = active;
-        if (inherited && !ownRequest && !isRearActive()) {
+        own.onRearDisplay(active, SystemClock.elapsedRealtime());
+        if (own.isInheritedGone(active)) {
             FoldLog.i("earlier or adopted request is gone");
-            setOwn(false);  // rear display is off, so the request we had to end has ended
+            own.clear();  // rear display is off, so the request we had to end has ended
         }
         notifyListeners();
     }
 
-    private void sessionStarted() {
-        sessionStart = SystemClock.uptimeMillis();
-        sessionActive = false;
-    }
-
-    private void requestActivated(int gen) {
-        if (gen == generation && sessionStart != 0) sessionActive = true;
-    }
-
-    private void requestEnded(int gen) {
-        if (gen == generation) setOwn(false);
-    }
-
-    private void setOwn(boolean own) {
-        ownRequest = own;
-        if (!own) {
-            inherited = false;
-            sessionStart = 0;
-            sessionActive = false;
-        }
-        save();
-    }
-
+    /** Run by {@link Ownership} after each change of what is ours. */
     private void save() {
-        boolean active = ownRequest || inherited;
+        boolean active = own.hasOwnRequest();
         if (prefs.getBoolean("request_active", false) != active) {
             prefs.edit().putBoolean("request_active", active).apply();
         }

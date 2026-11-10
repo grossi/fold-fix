@@ -81,18 +81,13 @@ public class Curtain extends Activity {
     }
 
     /**
-     * Why the request shouldn't be ended after all, or null. Checked when the launch arrives. The
-     * deadline is what keeps a late launch from ending a request the user chose meanwhile: which
-     * request is active can't be told, only that rear-display mode didn't go off in between.
+     * Why the request shouldn't be ended after all, or null. Checked when the launch arrives (see
+     * {@link Stale#whyCurtainStale}).
      */
     String whyStale() {
-        long late = SystemClock.elapsedRealtime() - getIntent().getLongExtra(EXTRA_DEADLINE, 0);
-        if (late > 0) return "too late by " + late + " ms";
-        if (!Boolean.FALSE.equals(FoldService.hallClosed)) return "the phone isn't open, or the service is off";
-        if (!rd.isRearActive()) return "rear display is off already";
-        if (rd.activations() != getIntent().getIntExtra(EXTRA_ACTIVATION, 0)) return "it went off and on again";
-        if (rd.hasOwnRequest()) return "the request is FoldFix's";
-        return null;
+        return Stale.whyCurtainStale(SystemClock.elapsedRealtime(), getIntent().getLongExtra(EXTRA_DEADLINE, 0),
+                FoldService.hallClosed, rd.isRearActive(),
+                rd.activations(), getIntent().getIntExtra(EXTRA_ACTIVATION, 0), rd.hasOwnRequest());
     }
 
     /** Starts the hold once rear-display mode is seen off. {@link #MAX_MS} keeps running. */

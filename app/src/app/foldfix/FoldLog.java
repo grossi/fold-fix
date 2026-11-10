@@ -73,8 +73,13 @@ final class FoldLog {
     }
 
     private static synchronized void add(char level, String msg) {
+        add(System.currentTimeMillis(), level, msg);
+    }
+
+    /** Keeps a line with the wall-clock time given. Apart from the above, only the tests call this. */
+    static synchronized void add(long time, char level, String msg) {
         int at = (int) (total++ % CAPACITY);
-        times[at] = System.currentTimeMillis();
+        times[at] = time;
         levels[at] = level;
         lines[at] = msg.length() > MAX_LINE ? msg.substring(0, MAX_LINE) + "…" : msg;
     }

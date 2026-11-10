@@ -23,15 +23,20 @@ The code is in `app/src/app/foldfix/`:
 | File | Role |
 | --- | --- |
 | `FoldService.java` | The accessibility service: hall sensor, reconcile loop, dialog tapping |
-| `RearDisplay.java` | Starts and ends rear-display mode (two backends), tracks whether the request is FoldFix's to end |
+| `Reconciler.java` | The rules of the reconcile loop: what to do for a hall reading and a device state, and when to look again |
+| `RearDisplay.java` | Starts and ends rear-display mode (two backends), reports whether it is active |
+| `Ownership.java` | RearDisplay's bookkeeping: whether the request is FoldFix's to end, and which cancel ended rear-display mode |
 | `RotationFix.java` | Corrects landscape on the outer screen while the phone is closed |
 | `Trampoline.java` | Invisible activity that makes the request or cancel as the top app |
 | `Curtain.java` | Black screen that ends Pixel Camera's repeat request on open and covers Camera for a moment |
+| `Stale.java` | The check the trampoline and the curtain make again when they run |
 | `Hardware.java` | Finds the hall sensor; checks whether the outer display exists |
 | `FoldLog.java` | The one way FoldFix logs: to Android's log, and into a short history kept in memory |
 | `App.java` | Marks the start of the process in that history; knows which build is installed |
 | `HallOverride.java` | Test hook: lets adb simulate folding and unfolding |
 | `MainActivity.java` | The status and setup screen |
+
+`Reconciler`, `Ownership` and `Stale` hold decisions and nothing of Android's, so they can be [tested without a phone](#the-tests).
 
 ## Why the phone gets stuck
 
@@ -423,6 +428,30 @@ What is left:
 - FoldFix requesting again costs little. In all 27 taps where its request was refused, Camera's own brought the outer screen back in state 5 about a second after it went dark. FoldFix's request takes about as long when it gets through, and it is what switches the inner screen off again.
 
 ## Testing and logs
+
+### The tests
+
+```sh
+./test.sh
+```
+
+The rules that decide which screen is on are in three classes that use nothing of Android's: `Reconciler` (the [reconcile loop](#5-the-reconcile-loop)), `Ownership` ([whose request it is](#6-whose-request-is-it)) and `Stale` (the second look of the [trampoline](#3-the-trampoline-activity) and the [curtain](#pixel-camera-on-screen-when-the-phone-is-opened)). The Android classes read the sensor, the clock and the device state, hand those to the rules, and carry out what the rules say. So the rules can be run on any computer with a JDK, and `test.sh` does that: `javac`, then `java`, with a test runner of a few lines in `tests/`. There is no test library, as there is no other dependency.
+
+What the tests cover:
+
+- **One step of the reconcile loop at a time:** every row of the [table](#5-the-reconcile-loop), the retry schedule, the 3-second windows, and when FoldFix must not act (no hall reading, no backend, device state unknown, outer screen not detected, rear-display mode unavailable). One group runs a step in every combination of what the rules read, about 33,000 of them, and checks what must hold in all: never a request without the outer screen, never a cancel of another app's request by the trampoline, a look for the dialog only where a dialog would be answered.
+- **The bookkeeping:** FoldFix's own request from launch to end, requests it takes over, the 10 seconds a request may wait for its dialog, and which cancel counts as the one that ended rear-display mode.
+- **Late launches:** when a cancel, a request or the curtain stands down.
+- **Whole sequences,** as they were tried by hand on a phone for earlier changes: closing and opening, another app's request made while open or found while closed, Pixel Camera on screen when the phone is opened, its selfie button on the closed phone, launches that arrive late, FoldFix restarted. These run on a model of the phone (`tests/app/foldfix/SimPhone.java`), in which the test says when a launch arrives, when the dialog shows and what another app does.
+- **[The history](#the-history):** which lines are kept, in which order, and how their times read. `FoldLog` also writes to Android's log, the one class of Android's that the tested code uses; a few lines in `tests/` stand in for it.
+
+A few cases carry the comment `current behaviour, pinned as found`. They record what the code does in a spot where that is open to question, so that a change there shows up. They don't say that it is right.
+
+What they don't cover: Android. The tests say what FoldFix decides, not what the system does with it. Whether a request is accepted, when the dialog shows, what Pixel Camera does and how long any of it takes is only known from a phone, and the model's idea of it is no better than the measurements in this document. The parts of FoldFix that talk to the system have no tests either: finding the sensor and the dialog, the two backends, the landscape fix and the status screen. A change to those, or to the rules, still needs the phone (below).
+
+The tests are never part of the APK: `build.sh` only compiles `app/src`. CI runs them before every build and before a release is signed.
+
+### The log
 
 FoldFix logs what it does under the tag `FoldFix`:
 
