@@ -24,6 +24,7 @@ The code is in `app/src/app/foldfix/`:
 | `RotationFix.java` | Corrects landscape on the outer screen while the phone is closed |
 | `Trampoline.java` | Invisible activity that makes the request or cancel as the top app |
 | `Hardware.java` | Finds the hall sensor; checks whether the outer display exists |
+| `HallOverride.java` | Test hook: lets adb simulate folding and unfolding |
 | `MainActivity.java` | The status and setup screen |
 
 ## Why the phone gets stuck
@@ -273,6 +274,25 @@ adb shell am start -n app.foldfix/.Trampoline --es action cancel
 ```
 
 The outer-screen guard still applies, and the running service undoes any request of its own that doesn't match the fold position.
+
+Folding and unfolding can be simulated too, so both directions can be tested on a phone that stays shut on a desk:
+
+```sh
+adb shell am broadcast -n app.foldfix/.HallOverride --es hall open
+adb shell am broadcast -n app.foldfix/.HallOverride --es hall closed
+adb shell am broadcast -n app.foldfix/.HallOverride --es hall real
+```
+
+`open` and `closed` make the running service act on that value instead of the hall sensor's. It takes the same path as a real sensor event: the retry schedule is reset, the reconcile loop runs, and the trampoline and the landscape fix see the simulated value. `real` goes back to the sensor and applies its current reading straight away.
+
+- While a value is simulated, the sensor's readings are remembered and logged, but not acted on.
+- The command prints what happened (`data="simulating hall open, sensor says closed"`), and every change is logged.
+- The status screen shows a `TEST MODE` line under **Accessibility service** for as long as a value is simulated.
+- Nothing is stored. The override is off by default and ends when the service stops or connects again, or when FoldFix's process restarts. It's ignored while the service isn't running, or before the sensor's first reading.
+- There is no timeout: finish a test with `real`, or the phone keeps acting on the simulated value.
+- Like the trampoline, the receiver is protected by `DUMP`. The adb shell and privileged system apps hold it; any other app can only send the broadcast if that permission was granted to it over adb.
+
+As with a real fold, the switch can be delayed while the screen is off; `adb shell input keyevent KEYCODE_WAKEUP` wakes it. Don't read the screen with `uiautomator dump` during such a test: it suspends all accessibility services while it runs, which restarts FoldFix's service and so ends the override. `screencap` is safe.
 
 ## What FoldFix can't do
 

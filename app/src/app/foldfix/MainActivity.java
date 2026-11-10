@@ -142,8 +142,12 @@ public class MainActivity extends Activity implements SensorEventListener {
         serviceEnabled = enabled;
         releaseIfTurnedOff();
         String status = FoldService.status;
+        // Said loudly, so a test state isn't mistaken for what the hardware reports.
+        Boolean simulated = FoldService.simulatedHall;
+        String test = simulated == null ? "" : "\n" + BAD + "TEST MODE: acting on a simulated \""
+                + FoldService.name(simulated) + "\" hall reading (set over adb), not on the sensor below.";
         boolean holding = rd.hasOwnRequest() && rd.isRearActive();
-        serviceText.setText(enabled ? (status == null ? WAIT + "On, starting…" : OK + "On. " + status)
+        serviceText.setText(enabled ? (status == null ? WAIT + "On, starting…" : OK + "On. " + status) + test
                 : holding ? BAD + "Off, but the outer screen is still held. Open the phone while this "
                         + "screen is showing to switch back (or restart the phone)."
                 : BAD + "Off: turn on FoldFix in Accessibility settings");

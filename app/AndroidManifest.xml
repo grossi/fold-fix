@@ -43,6 +43,15 @@
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|density|keyboardHidden|uiMode"
             android:theme="@style/Theme.FoldFix.Invisible" />
 
+        <!-- Test hook: makes the service act on a simulated hall reading (see HallOverride).
+             Like the trampoline, exported only to holders of DUMP: the adb shell and privileged
+             system apps, and any other app only if DUMP is granted to it over adb. -->
+        <receiver
+            android:name=".HallOverride"
+            android:directBootAware="true"
+            android:exported="true"
+            android:permission="android.permission.DUMP" />
+
         <service
             android:name=".FoldService"
             android:directBootAware="true"

@@ -47,6 +47,13 @@ public class FoldService extends AccessibilityService implements SensorEventList
     static volatile String status;
     /** Last hall reading while the service runs, else null; lets the trampoline drop stale requests. */
     static volatile Boolean hallClosed;
+    /**
+     * Test override: the hall reading the service acts on instead of the sensor's, or null (see
+     * {@link HallOverride}). Never stored; gone when the service stops or connects again.
+     */
+    static volatile Boolean simulatedHall;
+    /** The running service, for {@link HallOverride}. Main thread only, like the service itself. */
+    private static FoldService instance;
 
     final Handler h = new Handler(Looper.getMainLooper());
     final Runnable reconcile = this::reconcile;
@@ -55,13 +62,23 @@ public class FoldService extends AccessibilityService implements SensorEventList
     RearDisplay rd;
     RotationFix rotation;
     boolean running;
+    /** The hall reading being acted on: the sensor's, or the simulated one. */
     Boolean closed;
+    /** The sensor's last reading, also kept up to date while a simulated one is in use. */
+    Boolean sensorClosed;
     long lastLaunch, lastRequest;
     int tries;
 
     @Override
     protected void onServiceConnected() {
         running = true;
+        instance = this;
+        if (simulatedHall != null) {
+            // Left over from an earlier connection that wasn't stopped: each one starts on the sensor.
+            Log.i(TAG, "hall simulation off: service connected again");
+            simulatedHall = null;
+            closed = hallClosed = null;  // the sensor's reading, sent again on registering, applies
+        }
         rd = RearDisplay.get(this);
         rd.addListener(reconcile);
         rotation = new RotationFix(this);
@@ -86,12 +103,49 @@ public class FoldService extends AccessibilityService implements SensorEventList
     @Override
     public void onSensorChanged(SensorEvent e) {
         boolean c = Hardware.isClosed(e);
+        boolean changed = sensorClosed == null || sensorClosed != c;
+        sensorClosed = c;
+        if (simulatedHall == null) {
+            onHall(c);
+        } else if (changed) {
+            Log.i(TAG, "hall sensor says " + name(c) + ", ignored: simulating " + name(simulatedHall));
+        }
+    }
+
+    /** A hall reading to act on, from the sensor or simulated. */
+    void onHall(boolean c) {
         if (closed != null && closed == c) return;
-        Log.i(TAG, c ? "hall closed" : "hall open");
+        Log.i(TAG, "hall " + name(c) + (simulatedHall != null ? " (simulated)" : ""));
         closed = hallClosed = c;
         lastLaunch = 0;
         tries = 0;
         reconcile();
+    }
+
+    /**
+     * Test hook behind {@link HallOverride}: makes the running service act on a simulated hall
+     * reading, or (null) on the sensor again, whose current reading then applies at once. Returns
+     * what happened, for the caller's output.
+     */
+    static String simulateHall(Boolean value) {
+        FoldService s = instance;
+        // Without a sensor reading there would be nothing true to go back to.
+        String refused = s == null ? "the service isn't running"
+                : s.sensorClosed == null ? "no reading from the hall sensor yet" : null;
+        if (refused != null) {
+            Log.w(TAG, "hall simulation ignored: " + refused);
+            return "ignored: " + refused;
+        }
+        simulatedHall = value;
+        String result = (value != null ? "simulating hall " + name(value) : "hall simulation off")
+                + ", sensor says " + name(s.sensorClosed);
+        Log.i(TAG, result);
+        s.onHall(value != null ? value : s.sensorClosed);
+        return result;
+    }
+
+    static String name(boolean closed) {
+        return closed ? "closed" : "open";
     }
 
     /** One step towards "closed ⇔ rear display"; re-arms itself until that holds. */
@@ -243,6 +297,11 @@ public class FoldService extends AccessibilityService implements SensorEventList
         if (rotation != null) rotation.setActive(false);
         status = null;
         hallClosed = null;
+        if (instance == this) {
+            instance = null;
+            if (simulatedHall != null) Log.i(TAG, "hall simulation off: service stopped");
+            simulatedHall = null;
+        }
     }
 
     @Override
