@@ -157,7 +157,10 @@ So for both requests and cancels, the service starts a tiny invisible activity, 
 
 Other apps can't start it. It's protected by `android:permission="android.permission.DUMP"`, which only the system and the adb shell hold; FoldFix can always start its own activity.
 
-A launch can be delayed, for example while the screen is off. If the phone has been opened by the time the trampoline runs, it drops the now-stale request instead of making it.
+A launch can be delayed, for example while the screen is off, so the trampoline checks again when it runs:
+
+- A **request** is dropped if the phone has been opened by then.
+- A **cancel** is dropped if the phone has been closed by then, or if no request is left that is FoldFix's to end (see [Whose request is it?](#6-whose-request-is-it)). The system ends whatever request is active when the cancel arrives. That could be FoldFix's new one on a phone that was closed again, which would turn the outer screen off for a moment, or one another app made in the meantime. The check is the one the service makes before it sends a cancel, so a late cancel does nothing a fresh one wouldn't. One difference: only a definite "closed" stops it. With no hall reading at all (the service has stopped, or has only just connected) it still goes through, because the request is FoldFix's to end either way. The log says `dropping stale cancel`.
 
 Being on top isn't always enough: a request made right after another switch can be refused because FoldFix isn't counted as a foreground app yet. The reconcile loop simply retries.
 
@@ -403,9 +406,12 @@ The trampoline can be driven from adb for testing. The adb shell holds the `DUMP
 ```sh
 adb shell am start -n app.foldfix/.Trampoline --es action request
 adb shell am start -n app.foldfix/.Trampoline --es action cancel
+adb shell am start -n app.foldfix/.Trampoline --es action cancel --ez force true
 ```
 
 The outer-screen guard still applies, and the running service undoes any request of its own that doesn't match the fold position.
+
+A plain `cancel` is checked like the service's own (see [the trampoline](#3-the-trampoline-activity)): it only ends a request that is FoldFix's to end, and not while the service reads the phone as closed. FoldFix can't always tell whose the active request is: one it took over from an earlier FoldFix process, or adopted, still counts as its own after another request replaced it without rear-display mode going off, and a plain `cancel` ends that one too. `--ez force true` skips that check and ends whatever request is active, for example another app's, or FoldFix's own on the closed phone. The service never uses it.
 
 Folding and unfolding can be simulated too, so both directions can be tested on a phone that stays shut on a desk:
 

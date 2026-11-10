@@ -52,7 +52,7 @@ public class FoldService extends AccessibilityService implements SensorEventList
 
     /** What the service is doing, for the status screen; null while it isn't running. */
     static volatile String status;
-    /** Last hall reading while the service runs, else null; lets the trampoline drop stale requests. */
+    /** Last hall reading while the service runs, else null; lets a late trampoline or curtain stand down. */
     static volatile Boolean hallClosed;
     /**
      * Test override: the hall reading the service acts on instead of the sensor's, or null (see
@@ -90,10 +90,14 @@ public class FoldService extends AccessibilityService implements SensorEventList
             // Left over from an earlier connection that wasn't stopped: each one starts on the sensor.
             Log.i(TAG, "hall simulation off: service connected again");
             simulatedHall = null;
-            closed = hallClosed = null;  // the sensor's reading, sent again on registering, applies
         }
+        // Nothing is kept from an earlier connection of this instance. The sensor sends its
+        // reading again on registering, and that first reading resets the rest (see onHall).
+        closed = sensorClosed = hallClosed = null;
         rd = RearDisplay.get(this);
         rd.addListener(reconcile);
+        // Likewise: the old helper would keep its overlay, listeners and receiver.
+        if (rotation != null) rotation.setActive(false);
         rotation = new RotationFix(this);
         sm = getSystemService(SensorManager.class);
         sm.unregisterListener(this);  // in case the system connects the same instance twice
@@ -357,10 +361,11 @@ public class FoldService extends AccessibilityService implements SensorEventList
         if (sm != null) sm.unregisterListener(this);
         if (rd != null) rd.removeListener(reconcile);
         if (rotation != null) rotation.setActive(false);
-        status = null;
-        hallClosed = null;
+        // The statics belong to the connected instance: an old one, stopped late, leaves them alone.
         if (instance == this) {
             instance = null;
+            status = null;
+            hallClosed = null;
             if (simulatedHall != null) Log.i(TAG, "hall simulation off: service stopped");
             simulatedHall = null;
         }

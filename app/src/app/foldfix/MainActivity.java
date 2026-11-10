@@ -107,6 +107,9 @@ public class MainActivity extends Activity implements SensorEventListener {
         super.onResume();
         resumed = true;
         rd.addListener(refresh);
+        // The reading from the last time this screen was shown may be out of date; the sensor
+        // sends its current one on registering. Until then nothing is released (see below).
+        hallClosed = null;
         if (hall != null) sm.registerListener(this, hall, SensorManager.SENSOR_DELAY_NORMAL);
         hingeSeen = false;
         if (hinge != null) {

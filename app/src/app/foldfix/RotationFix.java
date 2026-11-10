@@ -128,7 +128,11 @@ final class RotationFix implements SensorEventListener, DisplayManager.DisplayLi
             sm.unregisterListener(this);
             dm.unregisterDisplayListener(this);
             service.unregisterReceiver(screenEvents);
-            if (overlay != null) wm.removeView(overlay);
+            try {
+                if (overlay != null) wm.removeView(overlay);
+            } catch (RuntimeException e) {  // not attached any more
+                Log.w(TAG, "landscape fix: the overlay was gone already: " + e);
+            }
             overlay = null;
             held = -1;
             forced = -1;
@@ -155,7 +159,14 @@ final class RotationFix implements SensorEventListener, DisplayManager.DisplayLi
         params.screenOrientation = target < 0 ? ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
                 : target == Surface.ROTATION_90 ? ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
                 : ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE;
-        wm.updateViewLayout(overlay, params);
+        try {
+            wm.updateViewLayout(overlay, params);
+        } catch (RuntimeException e) {
+            // The overlay isn't attached any more. Thrown here it would take the service down, so
+            // turn off instead: the next setActive(true) starts with a new overlay.
+            Log.w(TAG, "landscape fix: can't update the overlay, turning off", e);
+            setActive(false);
+        }
     }
 
     private static boolean landscape(int rotation) {
