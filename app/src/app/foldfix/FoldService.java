@@ -182,6 +182,15 @@ public class FoldService extends AccessibilityService implements SensorEventList
 
         if (closed) {
             if (rear) {  // already on the outer screen, whoever asked for it
+                // Our own request can still be waiting for its dialog: another app's got in first
+                // (Pixel Camera's does, when its selfie button has just ended ours). The dialog
+                // then comes up on the outer screen, in front of the user. Confirm it, which puts
+                // our request in place of the other one.
+                if (rd.isSessionWaiting()) {
+                    AccessibilityNodeInfo dialog = findDialog();
+                    if (dialog != null) click(dialog, CONFIRM_ID);
+                    if (now - lastLaunch < DIALOG_WAIT_MS) h.postDelayed(reconcile, POLL_MS);
+                }
                 // Another app's request can't be meant for a closed phone, and it never ends by
                 // itself: take it over, so that opening the phone ends it like one of ours.
                 if (!ours) rd.adopt();
@@ -326,7 +335,9 @@ public class FoldService extends AccessibilityService implements SensorEventList
         // Fast path for the dialog appearing; skip the window scan when there's nothing to do.
         if (!running || closed == null || !rd.isKnown()) return;
         boolean recent = SystemClock.uptimeMillis() - lastRequest < DIALOG_WAIT_MS;
-        if (closed ? !rd.isRearActive() : rd.hasOwnRequest() || recent) h.post(reconcile);
+        if (closed ? !rd.isRearActive() || rd.isSessionWaiting() : rd.hasOwnRequest() || recent) {
+            h.post(reconcile);
+        }
     }
 
     // Turning the service off can't end our request: once unbound, Android blocks the trampoline

@@ -45,7 +45,8 @@ import java.util.regex.Pattern;
  *
  * <p>So an active request only ends when someone cancels it. FoldFix does that for its own
  * requests and for those it {@linkplain #adopt adopted}. The only other one it ends is the one
- * {@link Curtain} is for.
+ * {@link Curtain} is for. One more can be replaced without a cancel: a request that became active
+ * while FoldFix's own was waiting for its dialog gives way when FoldService confirms that dialog.
  *
  * <p>One instance per process, shared by the service and the trampoline activity: the extension
  * keeps per-process session state. Everything runs on the main thread; listeners are posted.
@@ -176,6 +177,11 @@ final class RearDisplay {
     boolean isSessionLive() {
         long start = sessionStart;
         return start != 0 && (sessionActive || SystemClock.uptimeMillis() - start < STALE_SESSION_MS);
+    }
+
+    /** Our request was accepted and is still waiting for its dialog, and not yet given up on. */
+    boolean isSessionWaiting() {
+        return !sessionActive && isSessionLive();
     }
 
     /** Called by FoldService right before it launches the trampoline to request. */
