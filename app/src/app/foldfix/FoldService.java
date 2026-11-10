@@ -232,7 +232,12 @@ public class FoldService extends AccessibilityService implements SensorEventList
             // real selfie mode) is left alone, apart from the one followUp() deals with.
             if (!ours && !recent) {
                 tries = 0;
-                setStatus(rear ? "Open: another app is using the outer screen" : "Open: inner screen on");
+                // A cancel of ours drops ownership a moment before rear-display mode is seen going
+                // off: until then that isn't another app's. Looked at again in case it stays on.
+                boolean ending = rear && rd.isCancelPending();
+                if (ending) h.postDelayed(reconcile, RearDisplay.CANCEL_EFFECT_MS);
+                setStatus(ending ? "Open: switching back to the inner screen"
+                        : rear ? "Open: another app is using the outer screen" : "Open: inner screen on");
                 return;
             }
             AccessibilityNodeInfo dialog = findDialog();

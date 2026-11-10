@@ -44,8 +44,9 @@ import java.util.regex.Pattern;
  * </ul>
  *
  * <p>So an active request only ends when someone cancels it. FoldFix does that for its own
- * requests and for those it {@linkplain #adopt adopted}. The only other one it ends is the one
- * {@link Curtain} is for. One more can be replaced without a cancel: a request that became active
+ * requests and for those it {@linkplain #adopt adopted}. The only other one it ends by itself is
+ * the one {@link Curtain} is for; the user can end any with a button on the status screen
+ * ({@link #cancelForUser}). One more can be replaced without a cancel: a request that became active
  * while FoldFix's own was waiting for its dialog gives way when FoldService confirms that dialog.
  *
  * <p>One instance per process, shared by the service and the trampoline activity: the extension
@@ -108,7 +109,10 @@ final class RearDisplay {
     /** How often rear-display mode has turned on, and whether it was on at the last look. */
     private volatile int activations;
     private boolean wasActive;
-    /** Real time (it counts sleep too) of the last cancel made here, until its effect is seen. */
+    /**
+     * Real time (it counts sleep too) of the last cancel made here, until its effect is seen. Not
+     * set by {@link #cancelForUser}.
+     */
     private long cancelledAt;
     /** Real time of the cancel made here that last turned rear-display mode off; else 0. */
     private volatile long endingCancelAt;
@@ -156,11 +160,21 @@ final class RearDisplay {
     /**
      * If rear-display mode last went off through a {@link #cancel} made in this process: when that
      * cancel was made ({@code SystemClock.elapsedRealtime()}, taken before the call). 0 if
-     * something else ended it, or if it hasn't been seen going off. The time of the cancel, not of
-     * the callback, which can be late: so nothing counted from it can run longer than meant.
+     * something else ended it, the user's {@link #cancelForUser} included, or if it hasn't been
+     * seen going off. The time of the cancel, not of the callback, which can be late: so nothing
+     * counted from it can run longer than meant.
      */
     long endingCancelAt() {
         return endingCancelAt;
+    }
+
+    /**
+     * A {@link #cancel} made in this process is under way: it was sent less than
+     * {@link #CANCEL_EFFECT_MS} ago, and rear-display mode hasn't been seen going off since.
+     * Main thread only.
+     */
+    boolean isCancelPending() {
+        return cancelledAt != 0 && SystemClock.elapsedRealtime() - cancelledAt < CANCEL_EFFECT_MS;
     }
 
     /** False when the system currently refuses rear-display mode (e.g. battery saver, heat). */
@@ -285,6 +299,19 @@ final class RearDisplay {
      * app).
      */
     boolean cancel() {
+        return cancel(false);
+    }
+
+    /**
+     * The same for the status screen's button, where the user ends the active request, whoever
+     * made it. Such a cancel isn't one {@link #endingCancelAt} reports: what another app requests
+     * after it is the user's business, not something for the service to follow up on.
+     */
+    boolean cancelForUser() {
+        return cancel(true);
+    }
+
+    private boolean cancel(boolean byUser) {
         if (!isRearActive()) {
             // Nothing active. A request still waiting for its dialog can't be cancelled through
             // the API (and the extension would lose track of it), only with the dialog's Cancel
@@ -306,8 +333,8 @@ final class RearDisplay {
                 return false;
             }
         }
-        Log.i(TAG, "rear display request cancelled");
-        cancelledAt = at;
+        Log.i(TAG, "rear display request cancelled" + (byUser ? " from the status screen" : ""));
+        if (!byUser) cancelledAt = at;
         generation++;
         setOwn(false);
         return true;

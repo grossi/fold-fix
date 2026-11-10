@@ -45,12 +45,13 @@ Install the app (step 1 below) and open **FoldFix**. Its status screen has these
 
 | Section | Affected phone | What else you might see |
 | --- | --- | --- |
-| **Accessibility service** | `On.` plus what FoldFix is doing, once set up | `Off: turn on FoldFix in Accessibility settings`: see [setup](#install-and-set-up) |
+| **Accessibility service** | `On.` plus what FoldFix is doing, once set up | `Off: turn on FoldFix in Accessibility settings`: see [setup](#install-and-set-up). A **Switch to the inner screen** button, only while the outer screen is on although the phone is open: see [Troubleshooting](#troubleshooting) |
 | **Hall sensor (closed / open)** | The sensor's name, then `closed` or `open`, changing as you fold | `Not found: this phone is not supported` |
 | **Hinge angle sensor** | `No readings: the sensor is likely broken` (after listening for 3 seconds) | An angle such as `178°`: the sensor works, so you may not need FoldFix |
 | **Outer screen** | `Detected` | `Not detected`: restart the phone while it's closed |
 | **Rear-display access** | `OK, no setup needed` | `Needs a one-time adb command`: see [Troubleshooting](#status-screen-asks-for-an-adb-command) |
 | **Device state** | `2 OPENED (rear display off)` even while the phone is folded | |
+| **Version** | The installed version and who signed it, such as `1.0.2 (3), official release` | `self-built (signed with another key)` for any build that isn't one of this project's releases, such as your own |
 
 Everything except the **Accessibility service** section works right after installing.
 
@@ -139,7 +140,7 @@ Fold and unfold once. Then open FoldFix and check:
 - **Hall sensor** shows the right `closed` / `open` state.
 - **Rear-display access** says `OK`.
 
-If it says `Open: another app is using the outer screen`, an app such as Pixel Camera switched screens while the phone was open. FoldFix leaves that alone, so switch back in that app. If the outer screen stays on after you've left the app, close and open the phone once: FoldFix ends any outer-screen request it finds still active on a closed phone when you open it.
+If it says `Open: another app is using the outer screen`, an app such as Pixel Camera switched screens while the phone was open. FoldFix leaves that alone, so switch back in that app. If the outer screen stays on after you've left the app, tap **Switch to the inner screen**, right below that line. The button is shown while the outer screen is on although the phone is open, and ends the outer-screen request, whichever app made it. FoldFix does nothing more after that: an app that asks for the outer screen again gets it. Closing and opening the phone once also works: FoldFix ends any outer-screen request it finds still active on a closed phone when you open it.
 
 **Pixel Camera stays on the outer screen after opening the phone.**
 Camera, when it was opened on the closed phone, asks for the outer screen again as soon as the phone is opened. FoldFix undoes that once per opening, and Camera should appear on the inner screen after about 3 seconds. Now and then Camera asks once more after that, which FoldFix leaves alone. If it stays on the outer screen, and the inner screen keeps showing "Front screen turned on", close the phone and open it again, or leave Camera and then use the "Slide to use inner screen" control. Sliding while Camera is still on screen doesn't help: Camera asks for the outer screen again. Then please [open an issue](../../issues) with FoldFix's log (see [Contributing](#contributing)); the lines containing `another app turned rear display on` say what happened.
@@ -271,7 +272,7 @@ The build picks the newest installed build-tools and platform automatically. The
 | `BUILD_TOOLS_VERSION` | newest installed | Build-tools version to use, e.g. `35.0.0` |
 | `ANDROID_PLATFORM` | newest installed | Platform to compile against, e.g. `android-35` |
 
-Android only installs an update over an existing app if both are signed with the same key. If you switch between your own build and a release, uninstall first; you'll need to turn the accessibility service on again afterwards.
+Android only installs an update over an existing app if both are signed with the same key. If you switch between your own build and a release, uninstall first; you'll need to turn the accessibility service on again afterwards. The status screen's **Version** section says which of the two is installed.
 
 ### Releases
 
@@ -322,7 +323,7 @@ Reports from other devices and Android versions are the most useful contribution
 
 - device model and Android build (`adb shell getprop ro.build.fingerprint`),
 - what happened when folding and unfolding,
-- what FoldFix's status screen shows,
+- what FoldFix's status screen shows, and its **Version** line copied as it is (for example `1.0.2 (3), official release`): it says exactly which build is installed,
 - the output of the checks in [docs/diagnosis.md](docs/diagnosis.md),
 - FoldFix's log while you fold and unfold a few times: `adb logcat -s FoldFix`.
 

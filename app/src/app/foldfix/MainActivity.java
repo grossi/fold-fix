@@ -5,6 +5,10 @@ import android.app.Activity;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Intent;
+import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
+import android.content.pm.Signature;
+import android.content.pm.SigningInfo;
 import android.graphics.Insets;
 import android.graphics.Typeface;
 import android.hardware.Sensor;
@@ -15,6 +19,7 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.provider.Settings;
 import android.util.TypedValue;
 import android.view.View;
@@ -26,12 +31,20 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.security.MessageDigest;
 import java.util.Locale;
 
 /** Status and setup checklist. Everything refreshes on resume; sensors update live. */
 public class MainActivity extends Activity implements SensorEventListener {
     static final long HINGE_LISTEN_MS = 3_000;
     static final String OK = "✓ ", BAD = "✗ ", WAIT = "… ";
+    /** After a tap that sent a cancel, the switch button is hidden for this long: one cancel, then wait. */
+    static final long SWITCH_AGAIN_MS = 2_000;
+    /**
+     * SHA-256 of the certificate the releases are signed with. Not a secret: the release job's
+     * log prints it, and release notes quote it.
+     */
+    static final String RELEASE_CERT_SHA256 = "41f87594fad12af529af92f99bd25c8309020fc5d681acdf9d2fc6c53bdb57e3";
 
     final Handler h = new Handler(Looper.getMainLooper());
     final Runnable refresh = this::refresh;
@@ -39,12 +52,17 @@ public class MainActivity extends Activity implements SensorEventListener {
 
     LinearLayout list;
     TextView serviceText, hallText, hingeText, outerText, accessText, stateText;
-    View accessCommand;
+    View accessCommand, switchBox;
     SensorManager sm;
     Sensor hall, hinge;
     RearDisplay rd;
     boolean hingeSeen, resumed, serviceEnabled = true;
     Boolean hallClosed;
+    /**
+     * Uptime of the last tap on the switch button that sent a cancel. Static, because the switch
+     * it causes recreates this screen.
+     */
+    static long switchedAt;
 
     @Override
     protected void onCreate(Bundle b) {
@@ -73,6 +91,14 @@ public class MainActivity extends Activity implements SensorEventListener {
                 + "for Pixel Fold phones with a broken hinge sensor.", 14, false));
 
         serviceText = section("Accessibility service");
+        // Only shown while it can help, see canSwitchToInner().
+        LinearLayout switcher = new LinearLayout(this);
+        switcher.setOrientation(LinearLayout.VERTICAL);
+        switcher.addView(button("Switch to the inner screen", this::switchToInner));
+        switcher.addView(text("The outer screen is on although the phone is open. This switches back "
+                + "to the inner screen, whichever app asked for the outer one.", 13, false));
+        switchBox = switcher;
+        list.addView(switcher);
         list.addView(button("Open accessibility settings",
                 () -> startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))));
         list.addView(text("If the switch is greyed out (\"restricted setting\"): open App info, "
@@ -100,6 +126,10 @@ public class MainActivity extends Activity implements SensorEventListener {
         accessCommand = command;
         list.addView(command);
         stateText = section("Device state");
+        // The line to copy into a bug report.
+        TextView version = section("Version");
+        version.setText(describeBuild());
+        version.setTextIsSelectable(true);
     }
 
     @Override
@@ -154,6 +184,7 @@ public class MainActivity extends Activity implements SensorEventListener {
                 : holding ? BAD + "Off, but the outer screen is still held. Open the phone while this "
                         + "screen is showing to switch back (or restart the phone)."
                 : BAD + "Off: turn on FoldFix in Accessibility settings");
+        switchBox.setVisibility(canSwitchToInner() ? View.VISIBLE : View.GONE);
 
         outerText.setText(Hardware.outerDisplayPresent(this) ? OK + "Detected"
                 : BAD + "Not detected. Restart the phone while it is closed: the outer screen "
@@ -184,7 +215,7 @@ public class MainActivity extends Activity implements SensorEventListener {
         } else if (e.sensor == hall) {
             hallClosed = Hardware.isClosed(e);
             hallText.setText(OK + hall.getName() + ": " + (hallClosed ? "closed" : "open"));
-            releaseIfTurnedOff();
+            refresh();  // releases if turned off, and shows or hides the switch button
         }
     }
 
@@ -197,6 +228,68 @@ public class MainActivity extends Activity implements SensorEventListener {
         if (resumed && !serviceEnabled && Boolean.FALSE.equals(hallClosed) && rd.isKnown()
                 && rd.isRearActive() && rd.hasOwnRequest() && rd.cancel()) {
             Toast.makeText(this, "FoldFix is off: switched back to the inner screen", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    /**
+     * Whether to offer the switch button: rear-display mode is on although the phone is open.
+     * That is another app's request, which the service leaves alone on purpose, or something went
+     * wrong. Never while the phone reads closed, or before this screen has a reading: ending the
+     * request there would turn off the only screen in use, and the service would request again.
+     * Not while a cancel is under way either, the button's own or one of FoldFix's.
+     */
+    boolean canSwitchToInner() {
+        // In test mode the simulated reading counts, as it does for the service.
+        Boolean simulated = FoldService.simulatedHall;
+        return resumed && Boolean.FALSE.equals(simulated != null ? simulated : hallClosed)
+                && rd.isKnown() && rd.isRearActive() && !rd.isCancelPending()
+                && SystemClock.uptimeMillis() - switchedAt >= SWITCH_AGAIN_MS;
+    }
+
+    /**
+     * The switch button: ends the active request, whoever made it. The user asked for that, and
+     * this screen is the top app, so the system accepts it. One cancel per tap and nothing after
+     * it: if another app requests again, that is left to the user (see
+     * {@link RearDisplay#cancelForUser}).
+     */
+    void switchToInner() {
+        if (canSwitchToInner()) {  // checked again: the button may be a moment out of date
+            boolean sent = rd.cancelForUser();
+            if (sent) switchedAt = SystemClock.uptimeMillis();  // refused: the button stays, to try again
+            Toast.makeText(this, sent ? "Switched to the inner screen"
+                    : "Android refused to switch screens. Try again.", Toast.LENGTH_LONG).show();
+        }
+        refresh();
+    }
+
+    /**
+     * Version and who signed the installed app, for example "1.0.2 (3), official release". Read
+     * from the package manager, so it is what is installed, whatever its version is called.
+     */
+    String describeBuild() {
+        PackageManager pm = getPackageManager();
+        String version;
+        try {
+            PackageInfo p = pm.getPackageInfo(getPackageName(), PackageManager.PackageInfoFlags.of(0));
+            version = p.versionName + " (" + p.getLongVersionCode() + ")";
+        } catch (Exception e) {
+            return "Unknown";
+        }
+        // Looked up separately, so that a failure here still leaves the version.
+        try {
+            SigningInfo info = pm.getPackageInfo(getPackageName(), PackageManager.PackageInfoFlags.of(
+                    PackageManager.GET_SIGNING_CERTIFICATES)).signingInfo;
+            // The current signer only, not earlier keys it may have been rotated from.
+            Signature[] signers = info == null ? null : info.getApkContentsSigners();
+            if (signers == null || signers.length == 0) return version;
+            StringBuilder hex = new StringBuilder();
+            for (byte b : MessageDigest.getInstance("SHA-256").digest(signers[0].toByteArray())) {
+                hex.append(String.format(Locale.ROOT, "%02x", b));
+            }
+            return version + (signers.length == 1 && RELEASE_CERT_SHA256.contentEquals(hex)
+                    ? ", official release" : ", self-built (signed with another key)");
+        } catch (Exception e) {
+            return version;  // better no claim than a wrong one
         }
     }
 

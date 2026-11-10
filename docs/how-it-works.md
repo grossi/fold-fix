@@ -217,7 +217,7 @@ Reacting to single sensor events isn't enough: a fast close, open, close while a
 
 Some facts about requests that shaped the design:
 
-- **A cancel from the top app ends whatever request is active, whoever made it.** The system doesn't check ownership. So which requests get cancelled is decided by FoldFix's own logic: it tracks whether the active or pending request is its own, or one it took over (see [below](#other-apps-leftover-requests)), and never cancels otherwise, with [one exception](#pixel-camera-on-screen-when-the-phone-is-opened). A request another app makes while the phone is open, such as Pixel Camera's rear-camera selfie mode, is left alone.
+- **A cancel from the top app ends whatever request is active, whoever made it.** The system doesn't check ownership. So which requests get cancelled is decided by FoldFix's own logic: it tracks whether the active or pending request is its own, or one it took over (see [below](#other-apps-leftover-requests)), and never cancels otherwise, with [one exception](#pixel-camera-on-screen-when-the-phone-is-opened). A request another app makes while the phone is open, such as Pixel Camera's rear-camera selfie mode, is left alone, unless the user ends it with the [status screen's button](#the-status-screens-button).
 - **A waiting request can't be cancelled through the API.** Until its dialog is answered, only the dialog's buttons resolve it (see [the dialog](#4-the-switch-screens-dialog)).
 - **An active request outlives the process that made it.** The system keeps an active rear-display request (state 3 or 5) until the device reaches CLOSED, which a dead hinge sensor never reports. Only *pending* requests (not yet confirmed) die with their process.
 
@@ -271,6 +271,12 @@ What it costs, and what isn't known:
 #### Turning FoldFix off
 
 Turning the service off can't release its request. Once unbound, the service is no longer allowed to start the trampoline (`BAL_BLOCK`), and only the top app can cancel. FoldFix's status screen covers this case. If it's open while the service is off, the phone is open and a request that FoldFix has to end (its own or an adopted one) is still active, the screen cancels the request itself (it's the top app) and says so. Turning FoldFix back on, or rebooting, also releases it. That's why the README advises turning FoldFix off or uninstalling it with the phone open.
+
+#### The status screen's button
+
+The same cancel is also offered as a button, **Switch to the inner screen**, for a phone that is open but on the outer screen: another app's request that FoldFix leaves alone, or something that went wrong. It shows while rear-display mode is active and the status screen has read the hall sensor as open since it came to the front, never on a closed phone, where the outer screen is the one in use and the service would request it again. It is also hidden while a cancel of FoldFix's is under way, and for 2 seconds after a tap. A tap sends one cancel, which ends the active request whoever made it, because the user asked for exactly that.
+
+The service doesn't count this cancel as one of its own. If another app requests rear-display mode again afterwards, even within the 3 seconds of the [Pixel Camera](#pixel-camera-on-screen-when-the-phone-is-opened) rule, nothing follows: no curtain, no second cancel. The log line is `rear display request cancelled from the status screen`. In state 5 the status screen may be showing on the outer screen when the button is tapped; it moves to the inner screen with everything else.
 
 ### 7. The outer-screen guard
 
@@ -425,7 +431,7 @@ adb shell am broadcast -n app.foldfix/.HallOverride --es hall real
 
 - While a value is simulated, the sensor's readings are remembered and logged, but not acted on.
 - The command prints what happened (`data="simulating hall open, sensor says closed"`), and every change is logged.
-- The status screen shows a `TEST MODE` line under **Accessibility service** for as long as a value is simulated.
+- The status screen shows a `TEST MODE` line under **Accessibility service** for as long as a value is simulated. Its [button](#the-status-screens-button) goes by the simulated value too, not by the sensor.
 - Nothing is stored. The override is off by default and ends when the service stops or connects again, or when FoldFix's process restarts. It's ignored while the service isn't running, or before the sensor's first reading.
 - There is no timeout: finish a test with `real`, or the phone keeps acting on the simulated value.
 - Like the trampoline, the receiver is protected by `DUMP`. The adb shell and privileged system apps hold it; any other app can only send the broadcast if that permission was granted to it over adb.
