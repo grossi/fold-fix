@@ -103,7 +103,7 @@ FoldFix's service (`app.foldfix.FoldService`) is an accessibility service becaus
 - It's allowed to start activities from the background, but only while it's bound. Android exempts bound accessibility services from its background-activity-launch restrictions. Once the user turns the service off, the exemption is gone and its launches are blocked (`BAL_BLOCK`). See [Turning FoldFix off](#turning-foldfix-off).
 - It can see and tap System UI's confirmation dialog.
 
-Its accessibility configuration limits events to `com.android.systemui`. When looking for the dialog, the service only opens windows of type `TYPE_SYSTEM`, and only searches those whose package is `com.android.systemui`, by view ID. Going by Android's source, `TYPE_SYSTEM` also covers the overlay windows that other apps draw on top of the screen (this wasn't checked on the phone: none was up). The service then opens such a window as well, reads which package it belongs to, and leaves it. It can't tell before opening: what Android lists of a window (`AccessibilityWindowInfo`) has no owner, and the dialog's window has no title, the same type as an overlay, and nothing else that would set it apart. It never opens an app's ordinary windows and doesn't read or keep any screen text. The description Android shows when the service is turned on says the same, in short. The app requests no Android permissions.
+Its accessibility configuration limits events to `com.android.systemui`, and asks for them without delay (`notificationTimeout="0"`: Android holds every event back for as long as that setting says, see [Timing a switch](#timing-a-switch)). When looking for the dialog, the service only opens windows of type `TYPE_SYSTEM`, and only searches those whose package is `com.android.systemui`, by view ID. Going by Android's source, `TYPE_SYSTEM` also covers the overlay windows that other apps draw on top of the screen (this wasn't checked on the phone: none was up). The service then opens such a window as well, reads which package it belongs to, and leaves it. It can't tell before opening: what Android lists of a window (`AccessibilityWindowInfo`) has no owner, and the dialog's window has no title, the same type as an overlay, and nothing else that would set it apart. It never opens an app's ordinary windows and doesn't read or keep any screen text. The description Android shows when the service is turned on says the same, in short. The app requests no Android permissions.
 
 The service looks for the hall sensor by its type number (65547), or by a sensor type name containing "hall", and prefers the wake-up variant. Events from it arrive even while the phone is asleep. A first value of at least `0.5` means closed (it reports `1.0` closed and `0.0` open).
 
@@ -155,7 +155,7 @@ Two details matter:
 - **The first status callback is wrong.** Right after it's created, the library reports rear-display mode as "available" before it knows the device state. FoldFix registers its status listener slightly later, so the first status it gets is the correct one. If the listener can't be registered at all, FoldFix switches to the fallback below.
 - **The status doesn't say which state the phone is in.** It is one of "unavailable", "available" and "active", and it reads "available" in `CLOSED` as it does in `OPENED`. FoldFix has to tell those two apart (see [Android's own CLOSED state](#androids-own-closed-state)). The library's public interface has one thing that differs between them: the status of its other mode, the one that uses both screens, read "unavailable" in `CLOSED` and "available" in the other states that were tried. Going by the library's code, it also reads "unavailable" whenever Android doesn't offer that mode's state at the moment, whatever the fold, so it can't be taken to mean closed. So each time the status callback comes, which is on every change of the device state, FoldFix also reads the state the library holds, from a private field (`mCurrentDeviceState`). That is the same read the **Device state** line and the log have always shown. If a future update takes the field away, FoldFix no longer recognises `CLOSED` and behaves as it did before it looked for it. It can't take another state for `CLOSED`.
 
-Without the hidden-API exemption, Android's log shows FoldFix's own direct calls to the hidden API being denied (`blocked,test-api`), while requests through the library go through. A full switch (request → dialog confirmed → `REAR_DISPLAY_STATE`) takes about 0.2 seconds on a normal close: 0.18 to 0.24 seconds in the runs that were measured.
+Without the hidden-API exemption, Android's log shows FoldFix's own direct calls to the hidden API being denied (`blocked,test-api`), while requests through the library go through. A full switch (request → dialog confirmed → `REAR_DISPLAY_STATE`) takes about 0.12 seconds on a normal close: 0.11 to 0.15 seconds in the runs that were measured with the phone awake. The outer screen itself needs longer (see [Timing a switch](#timing-a-switch)).
 
 #### The hidden `DeviceStateManager` API (fallback)
 
@@ -197,7 +197,7 @@ Being on top isn't always enough: a request made right after another switch can 
 
 Every app request for classic rear-display mode makes System UI ask the user to confirm ("Switch screens?"). There is no "don't ask again" option.
 
-When the phone is closed, the request arrives while the inner screen is still the active one, so the dialog is drawn on the **inner screen, which is folded shut**. FoldFix finds it in System UI's windows and taps the confirm button, usually within about 0.2 seconds. Nobody sees it.
+When the phone is closed, the request arrives while the inner screen is still the active one, so the dialog is drawn on the **inner screen, which is folded shut**. FoldFix finds it in System UI's windows and taps the confirm button, usually within about 0.1 seconds. Nobody sees it.
 
 It identifies everything by view ID, not by text, so it works in any language:
 
@@ -238,7 +238,7 @@ FoldFix doesn't treat each sensor event as a one-off command. It keeps comparing
 
 Timing:
 
-- For 3 seconds after it has started the trampoline, it checks every **200 ms**. Accessibility events from System UI also wake it up immediately when a dialog appears.
+- For 3 seconds after it has started the trampoline, it checks every **200 ms**. An accessibility event from System UI wakes it up sooner when a dialog appears. In the measurements with the phone awake, that event arrived about 50 ms after the dialog was drawn, as its window became the focused one, so a normal close doesn't wait for the 200 ms.
 - Those 3 seconds count from the last launch since the phone was last closed or opened: every fold or unfold forgets the time of the launch before it. An opening that finds a request active launches the cancel, and so polls. An opening that finds FoldFix's request still waiting for its dialog launches nothing: FoldFix then looks again after 2 seconds, not 200 ms, and relies on System UI's event to find the dialog sooner.
 - Requests and cancels share one retry schedule. A launch that didn't help is repeated once **more than 2 seconds** have passed since it. FoldFix is looking every 200 ms at that point, so the launches come **2.2 seconds** apart. After 5 launches that didn't help, the wait is 30 seconds, and the timer for it is only set when the 3 seconds of looking every 200 ms are over: the launches then come **33 seconds** apart. Anything else that wakes the loop (a change of the device state, an event from System UI) can bring a launch sooner, but never less than 2 or 30 seconds after the last one. Each fold or unfold starts the schedule over.
 - Nothing is resent while FoldFix's own request is still in flight. A request waiting for its dialog is given up to **10 seconds**; after that, on a closed phone, it's treated as lost, ended and replaced.
@@ -558,10 +558,84 @@ adb shell am broadcast -n app.foldfix/.HallOverride --es hall real
 
 As with a real fold, the switch can be delayed while the screen is off; `adb shell input keyevent KEYCODE_WAKEUP` wakes it. Don't read the screen with `uiautomator dump` during such a test: it suspends all accessibility services while it runs, which restarts FoldFix's service and so ends the override. `screencap` is safe.
 
+### Timing a switch
+
+Where the time goes between the hall sensor's reading and the other screen showing something can be measured with [simulated folding](#driving-it-from-adb) and Android's own log. The log is filtered on the phone, because the dead hinge sensor fills it (see [The history](#the-history)):
+
+```sh
+adb shell "logcat -b all -v threadtime -v usec -T 1 | grep --line-buffered -E \
+  'FoldFix *:|wm_on_create_called.*Trampoline|VRI.SystemUIDialog.*reportDrawFinished|focus=true for SystemUIDialog|Requesting Transition to state|etting power mode [0-2] on physical|nblocked screen on|hwc-display: path=drm, id=[01], level=[1-9]|onFoldUpdate'" > switch.log &
+
+for i in $(seq 20); do
+  adb shell input keyevent KEYCODE_WAKEUP; sleep 2
+  adb shell am broadcast -n app.foldfix/.HallOverride --es hall open;   sleep 4
+  adb shell input keyevent KEYCODE_WAKEUP; sleep 2
+  adb shell am broadcast -n app.foldfix/.HallOverride --es hall closed; sleep 4
+done
+adb shell am broadcast -n app.foldfix/.HallOverride --es hall real
+kill %1
+```
+
+The lines that mark the stages, as a Pixel Fold on Android 17 writes them. The tags and texts other than FoldFix's are Android's internals and can change with any update:
+
+| Line | What has happened |
+| --- | --- |
+| `FoldFix : hall closed (simulated)` / `hall open (simulated)` | The start: FoldFix has the reading |
+| `FoldFix : request rear display (try 1, ...)` / `cancel rear display (try 1, ...)` | FoldFix has started the trampoline |
+| `wm_on_create_called: [...,app.foldfix.Trampoline,performCreate,...]` | Android has started the trampoline: it is being created |
+| `FoldFix : rear display requested (...)` / `rear display request cancelled` | The trampoline has run and Android has taken the call |
+| `viewroot_draw_event: [VRI[SystemUIDialog]...,reportDrawFinished ...]` | System UI has drawn the dialog |
+| `input_focus: ViewRootImpl focus=true for SystemUIDialog` | The dialog's window has become the focused one |
+| `FoldFix : clicked android:id/button1: true` | FoldFix has tapped Confirm |
+| `LogicalDisplayMapper: Requesting Transition to state: 3, from state=2, ...` | Android begins to switch screens. The same line says whether the phone was awake (`interactive=`) and whether Android wakes it (`wakeDevice=`) |
+| `SurfaceFlinger: Setting power mode 0 on physical display <id>`, then `Finished setting ...` | A panel is switched off (mode 2: on, mode 1: on for the always-on display). The IDs are those of `adb shell dumpsys SurfaceFlinger --display-id` |
+| `DisplayPowerController[0]: Unblocked screen on after N ms` | The windows for the new screen are drawn |
+| `hwc-display: path=drm, id=1, level=245, ...` | The brightness of a panel goes up from 0 (`id=0` inner, `id=1` outer): from here something can be seen |
+| `PhysicsBasedUnfoldTransitionProgressProvider: onFoldUpdate = FINISH_HALF_OPEN` | On opening: Android's unfold animation stops waiting for the hinge (below) |
+
+What is on a screen at a given moment can be checked with `adb exec-out screencap -p -d <id>`.
+
+Measured this way on a Pixel Fold on Android 17, awake and showing the lock screen, 20 switches each way, 6 seconds apart. Times are in milliseconds: the median, and the fastest and slowest in brackets.
+
+| Closing | Time | Whose time it is |
+| --- | --- | --- |
+| Hall reading → trampoline started | 0 (0 to 2) | FoldFix |
+| → trampoline created | 20 (12 to 30) | Android, starting an activity |
+| → request accepted | 2 (1 to 8) | FoldFix's call into Android |
+| → dialog drawn | 17 (12 to 28) | System UI |
+| → Confirm tapped | 69 (62 to 98) | Android, then FoldFix (below) |
+| **Hall reading → tap** | **113 (99 to 143)** | |
+| → inner panel off | 35 (26 to 46) | Android |
+| → outer panel begins to power on | 68 (10 to 218) | Android |
+| → outer panel on | 153 (149 to 162) | Android and the panel |
+| → windows drawn, brightness up | 105 (59 to 547) | Android and the apps on screen |
+| **Hall reading → outer screen showing** | **472 (421 to 1,002)** | |
+
+| Opening | Time | Whose time it is |
+| --- | --- | --- |
+| Hall reading → trampoline started | 12 (6 to 20) | FoldFix: takes the [landscape fix](#8-landscape-on-the-outer-screen)'s overlay away and looks for a dialog first |
+| → trampoline created | 20 (16 to 28) | Android, starting an activity |
+| → request cancelled | 1 (1 to 10) | FoldFix's call into Android |
+| **Hall reading → cancel** | **32 (26 to 52)** | |
+| → outer panel off | 33 (18 to 45) | Android |
+| → inner panel begins to power on | 22 (1 to 127) | Android |
+| → inner panel on | 191 (191 to 192) | Android and the panel |
+| → windows drawn, brightness up | 147 (35 to 583) | Android and the apps on screen |
+| **Hall reading → inner screen lit** | **429 (372 to 850)** | |
+| **Hall reading → inner screen showing its contents** | **from about 1,050** | Android's unfold animation (below) |
+
+What the numbers say:
+
+- **Closing: FoldFix's own part is the wait for the dialog.** Between the dialog being drawn and the tap, FoldFix waits for System UI's accessibility event. In a test build that logged it, the event reached FoldFix 47 ms after the dialog was drawn (39 to 62). That is the moment the dialog's window became the focused one, 46 ms after it was drawn in the same runs (38 to 57). Finding the dialog and tapping it took another 24 ms (10 to 37). Up to version 1.0.4 the service asked for `notificationTimeout="100"`, and Android held every event back for 100 ms: the event came 150 ms after the dialog was drawn (141 to 166), the tap 203 ms after the hall reading (186 to 217), and the outer screen was showing after 602 ms (488 to 930). The setting is 0 now. It had no use for FoldFix: it spaces out events of one type, and FoldFix only takes an event as a reason to run its rules again, which look for the dialog only while one of its own may be up. One event more reaches it per close: System UI sends two for the dialog, about 50 ms apart with the phone awake (40 to 60), and the old setting merged them into one. The second was sent before the tap each time and reached FoldFix just after it, when a look found no dialog left. The same event is what FoldFix waits for when the phone is opened again before the dialog was confirmed, where the dialog shows on the inner screen in front of the user and has to be cancelled. In 6 simulated openings 41 to 89 ms after a close, Cancel was tapped 78 ms after the dialog was drawn (68 to 84). With the old setting it was tapped 158 ms after (148 to 170) in 12 openings 42 to 127 ms after the close. The confirmation comes sooner now as well, so an opening that close behind a close can find the request active already: in 6 more runs, 100 to 267 ms after the close, the dialog had been confirmed, and the phone switched to the outer screen and back. All 24 runs ended on the inner screen with no dialog left.
+- **Opening: FoldFix's part is 32 ms of about a second.** The inner screen is lit after about 0.4 seconds, but black: at every simulated opening (the change from state 3 to state 2; other changes weren't looked at), System UI covers the inner screen for its unfold animation and, going by its log, waits for the hinge angle to drive it. No angle comes, so it gives up after a fixed second (1,035 ms after the hall reading, 1,029 to 1,054) and only then lets the contents show. In screenshots started 0.59 to 1.01 seconds after the hall reading the lit screen was black, in one started at 1.12 it was about three quarters as bright as in the end, and in one started at 1.24 it was complete. The animation's own end came at 2.07. With Android's animations switched off (**Remove animations** in the accessibility settings, or `adb shell settings put global animator_duration_scale 0`, which was what was tried) System UI doesn't put that cover up: the contents were there as soon as the screen was lit. That setting takes away other animations all over the phone as well, and it is the user's, not something an app can change.
+- **The rest is Android's**, and the same with or without the change above: powering a panel on takes 0.15 seconds for the outer one and 0.19 for the inner one, and Android keeps the new screen dark until the windows for it are drawn, which took anything from 30 ms to more than half a second.
+- **A sleeping phone is slower and stays asleep.** With the screen off, closing took 229 ms from the hall reading to the tap (106 to 319; 300 before the change), and the always-on display was up on the other screen about 0.4 seconds after an opening and 0.6 after a close. In all 43 simulated openings of a sleeping phone, Android switched the panels and did not wake the phone (`wakeDevice=false`). It then shows the always-on display on the inner screen until something else wakes it, such as the power button. A phone opened by hand also moves, which simulation leaves out: whether lifting it wakes it wasn't looked at. FoldFix doesn't wake the phone either. Its trampoline is an activity that runs at that moment, and an activity can ask Android to turn the screen on, so this is a choice and not a limit. It wasn't tried: it would wake the phone at every opening the hall sensor reports, wanted or not.
+- **Not in these numbers: the sensor.** Simulation starts where FoldFix gets the reading. For six folds made by hand before these runs, the time from the sensor event's own timestamp to FoldFix's `hall open` or `hall closed` line was 1 to 7 ms. (`adb shell dumpsys sensorservice` lists the hall sensor's last ten events with those timestamps, which count from the phone's start; a test build that logged an event's age tied them to the time of day.) How long the sensor needs to notice the magnet can't be seen from Android. FoldFix registers for it with `SENSOR_DELAY_NORMAL` and no batching. The sensor reports on change, so that period isn't a sampling rate. By Android's documentation it is the shortest time between two of its events (200 ms), which could only hold back the second of two changes that close together. Whether it does on this phone wasn't measured: it takes folding by hand.
+
 ## What FoldFix can't do
 
 - **Half-open postures** (tabletop mode and apps that adapt to a half-folded phone) need the hinge angle. The hall sensor only knows closed or not closed.
-- **The fold/unfold animation** is driven by the hinge angle, so it doesn't play.
+- **The fold/unfold animation** has no hinge angle to follow. On opening, Android still starts it: the inner screen is lit but black until Android has waited a second for an angle, and only then shows its contents (see [Timing a switch](#timing-a-switch)). That cover is System UI's, and an app can't take it away.
 - **Detecting the outer screen** happens in the bootloader, before any app runs. If the phone booted open and the outer panel wasn't found, only a reboot with the phone closed brings it back.
 - **Bringing back a front camera.** If Android lists no front camera, no app can open one, and the state FoldFix holds doesn't change which cameras are listed (see [Cameras on the closed phone](#9-cameras-on-the-closed-phone)).
 - **Turning the inner screen off under another app's request.** If another app's state-5 request is active when the phone is closed, FoldFix keeps it until the phone is opened (see [Other apps' leftover requests](#other-apps-leftover-requests)). The exception is a request of FoldFix's own that was still waiting for its dialog when the other one became active (see [the dialog](#4-the-switch-screens-dialog)). State 5 leaves the inner screen on, so until then the folded inner screen is lit whenever the outer one is.
